@@ -17,6 +17,7 @@ import time
 from sqlalchemy import select
 
 from . import config, db, filters, parser
+from . import deals as deals_mod  # noqa: F401 — reģistrē ai_usage/new_prices tabulas
 from .http import Client
 from .scheduler import Scheduler
 from .watcher import Watcher
@@ -67,7 +68,7 @@ def main() -> None:
         return
 
     client = Client()
-    w = Watcher(store, client)
+    w = Watcher(store, client, deals=deals_mod.DealEngine(store))
     try:
         if cmd == "run":
             Scheduler(w).run_forever()

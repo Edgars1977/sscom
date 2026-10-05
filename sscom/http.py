@@ -54,7 +54,9 @@ class Robots:
 
 
 class Client:
-    def __init__(self, delay_min: float = None, delay_max: float = None):
+    def __init__(self, delay_min: float = None, delay_max: float = None,
+                 base_url: str = config.BASE_URL):
+        self.base_url = base_url
         self.delay_min = config.REQUEST_DELAY_MIN if delay_min is None else delay_min
         self.delay_max = config.REQUEST_DELAY_MAX if delay_max is None else delay_max
         self.http = httpx.Client(
@@ -73,7 +75,7 @@ class Client:
 
     def _load_robots(self) -> None:
         try:
-            r = self.http.get(config.BASE_URL + "/robots.txt")
+            r = self.http.get(self.base_url + "/robots.txt")
             self.robots = Robots(r.text if r.status_code == 200 else "")
         except httpx.HTTPError as e:
             log.warning("robots.txt neizdevās ielādēt: %s", e)

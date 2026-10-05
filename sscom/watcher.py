@@ -13,9 +13,10 @@ log = logging.getLogger(__name__)
 
 
 class Watcher:
-    def __init__(self, store: db.Store, client: Client):
+    def __init__(self, store: db.Store, client: Client, deals=None):
         self.store = store
         self.client = client
+        self.deals = deals  # DealEngine vai None
         self.filters: List[filters.Filter] = filters.load()
         self.boilerplate = dealer.Boilerplate(store.all_descriptions())
 
@@ -58,9 +59,15 @@ class Watcher:
 
         self.store.insert_listing(l)
         known_ids[l.ss_id] = l.price
+        if notify and self.deals is not None and self.deals.enabled:
+            try:
+                if self.deals.handle_new(l):
+                    return l
+            except Exception:  # AI/cenu kļūda nedrīkst apturēt skrāpi
+                log.exception("Darījuma vērtēšana neizdevās: %s", l.url)
         if notify:
             f = filters.first_match(self.filters, l)
-            if f and telegram.send_listing(l, f.name):
+            if f and telegram.send_listing(l, f"parauga filtrs: {f.name}"):
                 self.store.mark_notified(l.ss_id, f.name)
                 log.info("Paziņots: %s (%s)", l.url, f.name)
         return l
@@ -121,7 +128,7 @@ class Watcher:
 
         for r in rows:
             if r.ss_id in known_ids:
-                self.store.touch(r.ss_id, r.price, known_ids[r.ss_id])
+                self.store.touch(r.ss_id, r.price, known_ids[r.ss_id], city=r.city)
             elif fetch_details:
                 if r.price is None:
                     continue  # sarakstā jau redzams, ka nav cenas — neveram vaļā
@@ -151,3 +158,29 @@ class Watcher:
         if changed:
             log.info("Firmu vērtējums pārrēķināts: %d izmaiņas", changed)
         return changed
+
+    # ------------------------------------------------------------ AI vecajiem ierakstiem
+
+    def backfill_ai(self, limit: int = 10) -> int:
+        """Analizē vecos privātos sludinājumus (bez paziņojumiem), lai būtu ar ko salīdzināt."""
+        if self.deals is None or not self.deals.enabled:
+            return 0
+        from .deals import ANALYSE_MAX_PRICE
+        L = db.listings
+        with self.store.engine.connect() as c:
+            rows = c.execute(
+                select(L).where(L.c.ai_at.is_(None), L.c.is_dealer == 0, L.c.price.isnot(None),
+                                L.c.price <= ANALYSE_MAX_PRICE, L.c.status != "no_price")
+                .order_by(L.c.first_seen.desc()).limit(limit)
+            ).all()
+        done = 0
+        for r in rows:
+            l = db.row_to_listing(r)
+            if self.deals.analyse(l) is None:
+                # atzīmējam, lai neķertos pie tā paša bezgalīgi
+                with self.store.engine.begin() as c:
+                    c.execute(db.listings.update().where(L.c.ss_id == r.ss_id).values(ai_at=db.now()))
+            done += 1
+        if done:
+            log.info("AI analīze vecajiem: %d", done)
+        return done

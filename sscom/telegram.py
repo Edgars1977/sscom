@@ -62,8 +62,9 @@ def format_listing(l: Listing, filter_name: str, extra: Optional[str] = None) ->
     return "\n".join(lines)
 
 
-def send_listing(l: Listing, filter_name: str, extra: Optional[str] = None) -> bool:
-    text = format_listing(l, filter_name, extra)
+def send_listing(l: Listing, filter_name: str, extra: Optional[str] = None,
+                 text: Optional[str] = None) -> bool:
+    text = text or format_listing(l, filter_name, extra)
     if l.photos and len(text) <= CAPTION_LIMIT:
         if _call("sendPhoto", photo=l.photos[0], caption=text):
             return True

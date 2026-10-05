@@ -274,6 +274,15 @@ def parse_detail(html: str, url: str, category: str) -> Optional[Listing]:
 
     title = description.split("\n", 1)[0][:200] if description else ""
     city = params.get("Pilsēta") or params.get("Pilsēta, rajons") or params.get("Vieta")
+    if not city:
+        # kontaktu blokā: <td class="ads_contacts_name">Vieta:</td><td class="ads_contacts">Rīga</td>
+        for td in tree.css("td.ads_contacts_name"):
+            if _text(td).rstrip(":").strip().lower() in ("vieta", "pilsēta", "место"):
+                nxt = td.next
+                while nxt is not None and nxt.tag != "td":
+                    nxt = nxt.next
+                city = _text(nxt) or None
+                break
 
     return Listing(
         ss_id=ss_id,

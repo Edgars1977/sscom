@@ -39,6 +39,7 @@ class Scheduler:
             c: now + random.uniform(5, 20) * 60 for c in config.CATEGORIES
         }
         self.catchup_done: Optional[date] = None
+        self.next_ai = time.monotonic() + 120
 
     def _rss_gap(self) -> float:
         return random.uniform(config.RSS_INTERVAL_MIN, config.RSS_INTERVAL_MAX)
@@ -69,6 +70,10 @@ class Scheduler:
             self.w.reload_filters()
             self.w.check_rss(c)
             self.next_rss[c] = time.monotonic() + self._rss_gap()
+
+        if mono >= self.next_ai:
+            self.w.backfill_ai(limit=10)
+            self.next_ai = time.monotonic() + 60
 
         due = [c for c, at in self.next_full.items() if at <= mono]
         for c in due[:1]:  # ne vairāk kā viena pilnā apstaigāšana vienā reizē

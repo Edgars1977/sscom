@@ -49,6 +49,16 @@ listings = Table(
     Column("is_dealer", Integer, nullable=False, default=0, index=True),
     Column("dealer_score", Integer, nullable=False, default=0),
     Column("dealer_reasons", Text),
+    # AI analīze un darījuma vērtējums (deals.py)
+    Column("model_key", String(150), index=True),
+    Column("item_type", String(30)),
+    Column("ai_json", Text),
+    Column("ai_at", DateTime),
+    Column("resale_est", Float),
+    Column("margin", Float),
+    Column("deal_conf", String(10)),
+    Column("deal_note", Text),
+    Column("deal_sent_at", DateTime),
 )
 
 price_history = Table(
@@ -157,7 +167,8 @@ class Store:
             if l.price is not None:
                 c.execute(insert(price_history).values(ss_id=l.ss_id, price=l.price, seen_at=t))
 
-    def touch(self, ss_id: str, price: Optional[float], old_price: Optional[float]) -> bool:
+    def touch(self, ss_id: str, price: Optional[float], old_price: Optional[float],
+              city: Optional[str] = None) -> bool:
         """Atjaunina last_seen; ja cena mainījusies, pieraksta vēsturē. Atgriež True, ja mainījās."""
         t = now()
         changed = price is not None and price != old_price
@@ -168,6 +179,9 @@ class Store:
                 c.execute(insert(price_history).values(ss_id=ss_id, price=price, seen_at=t))
             c.execute(update(listings).where(listings.c.ss_id == ss_id)
                       .where(listings.c.status != "no_price").values(**values))
+            if city:
+                c.execute(update(listings).where(listings.c.ss_id == ss_id)
+                          .where(listings.c.city.is_(None)).values(city=city))
         return changed
 
     def all_descriptions(self) -> List[Optional[str]]:
