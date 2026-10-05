@@ -1,0 +1,34 @@
+{
+  "_info": "PIEMĒRI — nomaini pret saviem. Lauki: name, categories (pc | noutbooks | completing-pc), subcategories (videocards, cpu, ram, ...), price_min, price_max, ram_min, keywords_any, keywords_none, enabled.",
+  "filters": [
+    {
+      "name": "Biznesa portatīvie līdz 200 €",
+      "categories": ["noutbooks"],
+      "price_max": 200,
+      "ram_min": 8,
+      "keywords_any": ["thinkpad", "latitude", "elitebook", "probook", "x390", "t480", "t490", "e15"],
+      "keywords_none": ["bojāts", "uz detaļām", "neieslēdzas", "сломан", "на запчасти"]
+    },
+    {
+      "name": "MacBook līdz 400 €",
+      "categories": ["noutbooks"],
+      "price_max": 400,
+      "keywords_any": ["macbook"],
+      "keywords_none": ["icloud", "bloķēts", "на запчасти"]
+    },
+    {
+      "name": "RTX videokartes līdz 250 €",
+      "categories": ["completing-pc"],
+      "subcategories": ["videocards"],
+      "price_max": 250,
+      "keywords_any": ["rtx"]
+    },
+    {
+      "name": "Datori ar i5/Ryzen līdz 250 €",
+      "categories": ["pc"],
+      "price_max": 250,
+      "ram_min": 16,
+      "keywords_any": ["i5-1", "i7-1", "ryzen 5", "ryzen 7"]
+    }
+  ]
+}
