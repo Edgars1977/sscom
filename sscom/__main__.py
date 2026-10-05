@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
+import time
 
 from sqlalchemy import select
 
@@ -29,6 +31,13 @@ def main() -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
     cmd = sys.argv[1] if len(sys.argv) > 1 else "run"
+
+    # Railway vidē bez Postgres nestrādājam — citādi dati pazustu pagaidu SQLite failā
+    if os.getenv("RAILWAY_ENVIRONMENT") and config.DATABASE_URL.startswith("sqlite"):
+        logging.error("DATABASE_URL nav iestatīts uz Postgres. Pievieno servisa Variables: "
+                      "DATABASE_URL = ${{Postgres.DATABASE_URL}}. Gaidu...")
+        while True:
+            time.sleep(3600)
     store = db.Store(db.get_engine())
 
     if cmd == "test-filters":
