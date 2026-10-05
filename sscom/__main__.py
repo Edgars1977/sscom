@@ -23,7 +23,11 @@ from .watcher import Watcher
 
 
 def main() -> None:
+    # žurnālā Rīgas laiks (Railway konteiners ir UTC) un stdout (Railway stderr rāda sarkanu)
+    os.environ.setdefault("TZ", config.TIMEZONE)
+    time.tzset()
     logging.basicConfig(
+        stream=sys.stdout,
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
@@ -81,24 +85,31 @@ def main() -> None:
 
 
 def migrate(src: db.Store, target_url: str) -> None:
-    """Pārkopē visas tabulas. Esošos ierakstus mērķī (pēc ss_id) neaiztiek."""
+    """Pārkopē sludinājumus, kuru mērķī vēl nav, ar to cenu vēsturi, un pilno apstaigāšanu žurnālu."""
     target = db.get_engine(target_url)
     with src.engine.connect() as s, target.begin() as t:
         have = set(t.execute(select(db.listings.c.ss_id)).scalars())
-        rows = [dict(r._mapping) for r in s.execute(select(db.listings))
-                if r.ss_id not in have]
+        rows = [dict(r._mapping) for r in s.execute(select(db.listings)) if r.ss_id not in have]
         if rows:
             t.execute(db.listings.insert(), rows)
         print(f"listings: {len(rows)} pārkopēti, {len(have)} jau bija")
-        for table in (db.price_history, db.scrape_log):
-            if t.execute(select(table.c.id).limit(1)).first():
-                print(f"{table.name}: mērķī jau ir dati — izlaižu")
-                continue
-            data = [{k: v for k, v in dict(r._mapping).items() if k != "id"}
-                    for r in s.execute(select(table))]
-            if data:
-                t.execute(table.insert(), data)
-            print(f"{table.name}: {len(data)} pārkopēti")
+
+        new_ids = {r["ss_id"] for r in rows}
+        ph = [{k: v for k, v in dict(r._mapping).items() if k != "id"}
+              for r in s.execute(select(db.price_history)) if r.ss_id in new_ids]
+        if ph:
+            t.execute(db.price_history.insert(), ph)
+        print(f"price_history: {len(ph)} pārkopēti")
+
+        # "full" ieraksti nosaka, vai kategorijai jau notikusi pilnā ielāde (=> drīkst paziņot)
+        done = set(t.execute(select(db.scrape_log.c.category)
+                             .where(db.scrape_log.c.kind == "full")).scalars())
+        logs = [{k: v for k, v in dict(r._mapping).items() if k != "id"}
+                for r in s.execute(select(db.scrape_log).where(db.scrape_log.c.kind == "full"))
+                if r.category not in done]
+        if logs:
+            t.execute(db.scrape_log.insert(), logs)
+        print(f"scrape_log (full): {len(logs)} pārkopēti")
 
 
 def dealers_report(store: db.Store, category=None) -> None:

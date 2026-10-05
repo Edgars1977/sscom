@@ -41,7 +41,7 @@ MAX_CONSECUTIVE_FAILURES = int(os.getenv("MAX_CONSECUTIVE_FAILURES", "5"))
 BACKOFF_BASE = float(os.getenv("BACKOFF_BASE", "30"))
 BACKOFF_MAX = float(os.getenv("BACKOFF_MAX", "1800"))
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///sscom.db")
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///sscom.db").strip()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 

@@ -77,7 +77,7 @@ def now() -> datetime:
 
 
 def get_engine(url: Optional[str] = None) -> Engine:
-    url = url or config.DATABASE_URL
+    url = (url or config.DATABASE_URL).strip()
     # Railway dod postgres://..., SQLAlchemy grib postgresql+psycopg://
     if url.startswith("postgres://"):
         url = "postgresql+psycopg://" + url[len("postgres://"):]
