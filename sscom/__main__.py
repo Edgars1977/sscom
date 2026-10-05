@@ -4,6 +4,7 @@
   python -m sscom full [kategorija]    — pilnā apstaigāšana (bez kategorijas = visas)
   python -m sscom test-filters         — parāda, kuri bāzes sludinājumi atbilst filtriem
   python -m sscom dealers [kategorija] — firmu atpazīšanas atskaite
+  python -m sscom migrate <mērķa_DB_URL> — pārkopē datus no DATABASE_URL uz citu DB (piem. Railway)
 """
 from __future__ import annotations
 
@@ -44,6 +45,10 @@ def main() -> None:
         print(f"\n{hits} no {len(rows)} atbilst filtriem")
         return
 
+    if cmd == "migrate":
+        migrate(store, sys.argv[2])
+        return
+
     if cmd == "dealers":
         dealers_report(store, sys.argv[2] if len(sys.argv) > 2 else None)
         return
@@ -64,6 +69,27 @@ def main() -> None:
             print(__doc__)
     finally:
         client.close()
+
+
+def migrate(src: db.Store, target_url: str) -> None:
+    """Pārkopē visas tabulas. Esošos ierakstus mērķī (pēc ss_id) neaiztiek."""
+    target = db.get_engine(target_url)
+    with src.engine.connect() as s, target.begin() as t:
+        have = set(t.execute(select(db.listings.c.ss_id)).scalars())
+        rows = [dict(r._mapping) for r in s.execute(select(db.listings))
+                if r.ss_id not in have]
+        if rows:
+            t.execute(db.listings.insert(), rows)
+        print(f"listings: {len(rows)} pārkopēti, {len(have)} jau bija")
+        for table in (db.price_history, db.scrape_log):
+            if t.execute(select(table.c.id).limit(1)).first():
+                print(f"{table.name}: mērķī jau ir dati — izlaižu")
+                continue
+            data = [{k: v for k, v in dict(r._mapping).items() if k != "id"}
+                    for r in s.execute(select(table))]
+            if data:
+                t.execute(table.insert(), data)
+            print(f"{table.name}: {len(data)} pārkopēti")
 
 
 def dealers_report(store: db.Store, category=None) -> None:
