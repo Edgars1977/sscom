@@ -12,6 +12,7 @@ import html
 import json
 import logging
 import os
+import re
 import statistics
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -33,6 +34,10 @@ MAX_PRICE = float(os.getenv("DEAL_MAX_PRICE", "500"))
 MAX_NEW_RATIO = float(os.getenv("DEAL_MAX_NEW_RATIO", "0.5"))
 ANALYSE_MAX_PRICE = float(os.getenv("DEAL_ANALYSE_MAX_PRICE", "750"))  # salīdzinājumiem analizējam plašāk
 LOCATIONS = [x.strip().lower() for x in os.getenv("DEAL_LOCATIONS", "rīga").split(",") if x.strip()]
+# Izjaukšana prasa vairāk darba (6–8 sludinājumi, nedēļas) — tāpēc augstāks slieksnis
+PARTOUT_MIN_MARGIN = float(os.getenv("DEAL_PARTOUT_MIN_MARGIN", "0.30"))
+PARTOUT_MIN_PROFIT = float(os.getenv("DEAL_PARTOUT_MIN_PROFIT", "60"))
+USED_FLOOR_OF_NEW = 0.55  # lietota RAM/SSD vismaz tik no jaunas cenas
 COMPS_MIN = 3
 COMPS_DAYS = 120
 # ja lietota prece maksā >= 85% no jaunas lētākās cenas, peļņas praktiski nevar būt — GPT nesaucam
@@ -41,6 +46,33 @@ NEW_PRICE_CEILING = 0.85
 CONDITION_LV = {"new": "jauns", "like_new": "kā jauns", "used": "lietots",
                 "broken": "bojāts", "for_parts": "uz detaļām"}
 CONF_LV = {"low": "zema", "medium": "vidēja", "high": "augsta"}
+
+
+def normalize_key(key: str) -> str:
+    """'NVIDIA GeForce RTX 3070 8GB' un 'nvidia rtx 3070 8gb' -> viens un tas pats."""
+    k = (key or "").lower()
+    k = re.sub(r"\b(geforce|graphics card|videokarte|processor|procesors)\b", " ", k)
+    return re.sub(r"\s+", " ", k).strip()
+
+
+@dataclass
+class PartOut:
+    price: float
+    total: float
+    parts: List[Dict[str, Any]]  # {"type","key","price","comps"}
+    verdict: Optional[str] = None
+
+    @property
+    def profit(self) -> float:
+        return self.total - self.price
+
+    @property
+    def margin(self) -> float:
+        return self.profit / self.price if self.price else 0
+
+    @property
+    def is_good(self) -> bool:
+        return self.margin >= PARTOUT_MIN_MARGIN and self.profit >= PARTOUT_MIN_PROFIT
 
 
 @dataclass
@@ -68,6 +100,7 @@ class DealEngine:
         self.ai = ai or AI(store)
         self.prices = prices or PriceLookup(store, ai=self.ai)
         self.last_eval = None
+        self.last_skip = None
 
     @property
     def enabled(self) -> bool:
@@ -82,7 +115,7 @@ class DealEngine:
                                 l.params, l.price, l.city)
         if facts is None:
             return None
-        values = dict(model_key=(facts["model_key"] or "").strip().lower() or None,
+        values = dict(model_key=normalize_key(facts["model_key"]) or None,
                       item_type=facts["item_type"], ai_json=json.dumps(facts, ensure_ascii=False),
                       ai_at=db.now())
         if facts["seller_is_business"] and not l.is_dealer:
@@ -120,7 +153,7 @@ class DealEngine:
     def evaluate(self, l: Listing, facts: Dict[str, Any]) -> Optional[Deal]:
         price = l.price
         broken = facts["condition"] in ("broken", "for_parts")
-        comps = [] if broken else self.comparables(facts["model_key"].strip().lower(), l.ss_id)
+        comps = [] if broken else self.comparables(normalize_key(facts["model_key"]), l.ss_id)
 
         # saliktam datoram/komplektam "jaunas cenas" nav — GPT reizēm dod tikai CPU nosaukumu
         query = facts.get("search_query") if facts["item_type"] not in ("desktop", "bundle") else None
@@ -155,6 +188,44 @@ class DealEngine:
                 deal_note=verdict))
         return deal
 
+    # ---------------------------------------------------------------- izjaukšana
+
+    def evaluate_partout(self, l: Listing, facts: Dict[str, Any]) -> Optional[PartOut]:
+        comps_in = []
+        for c in facts.get("components") or []:
+            key = normalize_key(c["key"])
+            if not key or re.search(r"\b(none|nav|нет)\b", key):
+                continue  # "dvd drive none" u.tml.
+            known = "unknown" not in key
+            comps = self.comparables(key, l.ss_id) if known else []
+            item = {"type": c["type"], "key": key, "ss_com_prices": comps[:15]}
+            # maz salīdzinājumu -> jaunā cena LV kā atskaites punkts (kešots 7 dienas)
+            if known and len(comps) < COMPS_MIN and c["type"] in ("cpu", "gpu", "motherboard", "ram", "storage", "psu"):
+                new = self.prices.get(key)
+                if new and new.n:
+                    item["new_price_latvia_min_eur"] = new.min_price
+            comps_in.append(item)
+        if len(comps_in) < 3:
+            return None
+        est = self.ai.estimate_parts(comps_in, l.price)
+        if not est:
+            return None
+        by_key = {p["key"]: max(0.0, float(p["used_price_eur"])) for p in est["parts"]}
+        parts = []
+        for c in comps_in:
+            price = by_key.get(c["key"], 0.0)
+            # RAM/SSD vēl ražo, un 2026. gadā tie ir dārgi; GPT tos mēdz novērtēt par zemu
+            if c["type"] in ("ram", "storage") and not c["ss_com_prices"] and c.get("new_price_latvia_min_eur"):
+                price = max(price, c["new_price_latvia_min_eur"] * USED_FLOOR_OF_NEW)
+            parts.append({"type": c["type"], "key": c["key"], "price": round(price),
+                          "comps": len(c["ss_com_prices"])})
+        po = PartOut(price=l.price, total=sum(p["price"] for p in parts), parts=parts,
+                     verdict=est.get("verdict_lv"))
+        with self.store.engine.begin() as c:
+            c.execute(update(db.listings).where(db.listings.c.ss_id == l.ss_id).values(
+                partout_est=round(po.total, 2), partout_json=json.dumps(parts, ensure_ascii=False)))
+        return po
+
     # ---------------------------------------------------------------- jauns sludinājums
 
     def location_ok(self, l: Listing, facts: Dict[str, Any]) -> bool:
@@ -165,16 +236,30 @@ class DealEngine:
         """Atgriež True, ja aizsūtīja paziņojumu par darījumu.
         Vērtējumu (arī negatīvu) atstāj self.last_eval, lai filtra ziņa var to parādīt."""
         self.last_eval = None
+        self.last_skip = None  # "location" -> arī filtra ziņu nesūtām (Edgars pērk tikai Rīgā)
         if not self.enabled or l.price is None or l.is_dealer:
             return False
         facts = self.analyse(l)
         if facts is None or l.is_dealer:
             return False
-        if l.price > MAX_PRICE or l.price < 5 or not self.location_ok(l, facts):
+        if not self.location_ok(l, facts):
+            self.last_skip = "location"
+            return False
+        if l.price > MAX_PRICE or l.price < 5:
             return False
         deal = self.evaluate(l, facts)
         if deal is not None:
-            self.last_eval = (facts, deal)
+            self.last_eval = (facts, deal, None)
+        if (deal is None or not deal.is_good) and facts["item_type"] in ("desktop", "bundle"):
+            po = self.evaluate_partout(l, facts)
+            if po is not None:
+                self.last_eval = (facts, deal, po) if deal else None
+                if po.is_good and telegram.send_listing(l, "", text=format_partout(l, facts, po)):
+                    with self.store.engine.begin() as c:
+                        c.execute(update(db.listings).where(db.listings.c.ss_id == l.ss_id).values(
+                            deal_sent_at=db.now(), notified_at=db.now(), matched_filter="AI pa daļām"))
+                    log.info("Pa daļām: %s %.0f € -> ~%.0f €", l.url, po.price, po.total)
+                    return True
         if deal is None or not deal.is_good:
             if deal:
                 log.info("Nav darījums: %s %.0f € -> ~%.0f € (%+.0f%%)", facts["model_key"], deal.price,
@@ -190,7 +275,27 @@ class DealEngine:
         return False
 
 
-def format_eval_line(facts: Dict[str, Any], d: Deal) -> str:
+PART_LV = {"cpu": "CPU", "gpu": "Video", "motherboard": "Plate", "ram": "RAM", "storage": "Disks",
+           "psu": "Barošana", "cooler": "Dzesēšana", "case": "Korpuss", "other": "Cits"}
+
+
+def format_partout(l: Listing, facts: Dict[str, Any], po: PartOut) -> str:
+    e = html.escape
+    lines = [
+        f"🔧 <b>Pa daļām +{po.profit:.0f} € ({po.margin * 100:.0f}%)</b> · prasa {po.price:.0f} € → detaļas ~{po.total:.0f} €",
+        f"<b>{e(l.title[:120])}</b>",
+    ]
+    for p in sorted(po.parts, key=lambda x: -x["price"]):
+        src = f" · ss.com {p['comps']}×" if p["comps"] else ""
+        lines.append(f"  {PART_LV.get(p['type'], p['type'])}: {e(p['key'][:45])} — ~{p['price']:.0f} €{src}")
+    lines.append(f"📍 {e(l.city or '?')}")
+    if po.verdict:
+        lines.append("🤖 " + e(po.verdict[:300]))
+    lines.append(f'<a href="{e(l.url)}">Atvērt ss.com</a>')
+    return "\n".join(lines)
+
+
+def format_eval_line(facts: Dict[str, Any], d: Deal, po: Optional[PartOut] = None) -> str:
     """Īss vērtējums filtra ziņai, ja tas nav darījums."""
     e = html.escape
     why = []
@@ -202,6 +307,8 @@ def format_eval_line(facts: Dict[str, Any], d: Deal) -> str:
             f" · pārliecība: {CONF_LV.get(d.confidence, d.confidence)}")
     if d.verdict:
         line += "\n🤖 " + e(d.verdict[:250])
+    if po is not None:
+        line += f"\n🔧 pa daļām ~{po.total:.0f} € ({po.margin * 100:+.0f}%)"
     return line
 
 

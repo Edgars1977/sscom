@@ -1,5 +1,5 @@
 {
-  "_info": "PIEMĒRI — nomaini pret saviem. Lauki: name, categories (pc | noutbooks | completing-pc), subcategories (videocards, cpu, ram, ...), price_min, price_max, ram_min, keywords_any, keywords_none, enabled.",
+  "_info": "PIEMĒRI — nomaini pret saviem. Lauki: name, categories (pc | noutbooks | completing-pc), subcategories (video, cpu, ram, motherboards, ssd, ...), price_min, price_max, ram_min, keywords_any, keywords_none, enabled.",
   "filters": [
     {
       "name": "Biznesa portatīvie līdz 200 €",
@@ -19,7 +19,7 @@
     {
       "name": "RTX videokartes līdz 250 €",
       "categories": ["completing-pc"],
-      "subcategories": ["videocards"],
+      "subcategories": ["video"],
       "price_max": 250,
       "keywords_any": ["rtx"]
     },

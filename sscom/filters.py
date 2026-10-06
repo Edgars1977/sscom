@@ -19,7 +19,7 @@ FILTERS_FILE = Path(__file__).resolve().parent.parent / "filters.json"
 class Filter:
     name: str
     categories: List[str] = field(default_factory=list)      # tukšs = visas
-    subcategories: List[str] = field(default_factory=list)   # completing-pc: videocards, cpu, ram...
+    subcategories: List[str] = field(default_factory=list)   # completing-pc: video, cpu, ram, motherboards, ssd...
     price_min: Optional[float] = None
     price_max: Optional[float] = None
     ram_min: Optional[int] = None

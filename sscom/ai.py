@@ -27,6 +27,8 @@ ai_usage = Table(
     Column("completion_tokens", Integer, nullable=False, default=0),
 )
 
+PART_TYPES = ["cpu", "gpu", "motherboard", "ram", "storage", "psu", "cooler", "case", "other"]
+
 ITEM_TYPES = ["desktop", "laptop", "cpu", "gpu", "ram", "motherboard", "psu", "storage",
               "case", "cooler", "monitor", "bundle", "other"]
 
@@ -58,10 +60,20 @@ EXTRACT_SCHEMA = {
         "urgency_note": {"type": ["string", "null"]},
         "delivers_to_riga": {"type": "boolean", "description":
                              "seller offers to bring/meet in Riga (not just parcel shipping)"},
+        "components": {"type": "array", "description":
+                       "ONLY for desktop PCs/bundles: every sellable part that is stated. Empty list otherwise.",
+                       "items": {"type": "object", "additionalProperties": False,
+                                 "properties": {
+                                     "type": {"type": "string", "enum": PART_TYPES},
+                                     "key": {"type": "string", "description":
+                                             "same canonical lowercase format as model_key, e.g. "
+                                             "'intel core i7-9700kf', 'nvidia rtx 3070 8gb', 'gigabyte z390 aorus pro wifi', "
+                                             "'ddr4 32gb 3200', 'nvme 1tb', 'aio 240mm'. 'unknown' if type stated without model"}},
+                                 "required": ["type", "key"]}},
     },
     "required": ["item_type", "model_key", "search_query", "release_year", "cpu", "gpu", "ram_gb",
                  "storage_gb", "condition", "defects", "seller_is_business", "urgent",
-                 "urgency_note", "delivers_to_riga"],
+                 "urgency_note", "delivers_to_riga", "components"],
 }
 
 MATCH_SCHEMA = {
@@ -79,6 +91,22 @@ ESTIMATE_SCHEMA = {
         "verdict_lv": {"type": "string", "description": "1-2 short sentences in Latvian: why it is or isn't a good flip"},
     },
     "required": ["resale_price_eur", "confidence", "verdict_lv"],
+}
+
+
+PARTS_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "properties": {
+        "parts": {"type": "array", "items": {
+            "type": "object", "additionalProperties": False,
+            "properties": {"key": {"type": "string"},
+                           "used_price_eur": {"type": "number", "description":
+                                              "realistic price when sold separately on ss.com Riga within ~3 weeks; "
+                                              "0 for parts nobody buys"}},
+            "required": ["key", "used_price_eur"]}},
+        "verdict_lv": {"type": "string", "description": "1-2 short sentences in Latvian about parting this PC out"},
+    },
+    "required": ["parts", "verdict_lv"],
 }
 
 
@@ -165,3 +193,17 @@ class AI:
                           "price a private seller gets on ss.com for this item. Used items sell well below new price; "
                           "old generations lose value fast. Be conservative.",
                           json.dumps(ctx, ensure_ascii=False), ESTIMATE_SCHEMA)
+
+    # ---------------------------------------------------------------- 4. izjaukšanas vērtība
+
+    def estimate_parts(self, components: List[Dict[str, Any]], asking_price: float) -> Optional[Dict[str, Any]]:
+        """components: [{"type","key","comps":[cenas ss.com]}]"""
+        return self._call(MODEL_SMART, "parts",
+                          "You are a used PC parts reseller in Riga, Latvia (2026). For each part estimate the realistic "
+                          "price when sold SEPARATELY as used on ss.com. ss.com comparable prices are the best evidence. "
+                          "new_price_latvia_min_eur: for parts still in production a used one sells for ~55-75% of it; "
+                          "for discontinued parts that price is leftover stock and overstates value. RAM and SSD prices "
+                          "are high in 2026, do not undervalue them. Unknown/no-name PSUs and cases are worth little. "
+                          "Be realistic, not pessimistic.",
+                          json.dumps({"asking_price_for_whole_pc_eur": asking_price, "parts": components},
+                                     ensure_ascii=False), PARTS_SCHEMA)

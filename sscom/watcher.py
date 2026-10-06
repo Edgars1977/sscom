@@ -66,6 +66,9 @@ class Watcher:
                     return l
             except Exception:  # AI/cenu kļūda nedrīkst apturēt skrāpi
                 log.exception("Darījuma vērtēšana neizdevās: %s", l.url)
+        if notify and getattr(self.deals, "last_skip", None) == "location":
+            log.info("Izlaists (ne Rīga): %s %s", l.city, l.url)
+            return l
         if notify:
             f = filters.first_match(self.filters, l)
             extra = None

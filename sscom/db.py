@@ -59,6 +59,8 @@ listings = Table(
     Column("deal_conf", String(10)),
     Column("deal_note", Text),
     Column("deal_sent_at", DateTime),
+    Column("partout_est", Float),
+    Column("partout_json", Text),
 )
 
 price_history = Table(
