@@ -67,6 +67,7 @@ class DealEngine:
         self.store = store
         self.ai = ai or AI(store)
         self.prices = prices or PriceLookup(store, ai=self.ai)
+        self.last_eval = None
 
     @property
     def enabled(self) -> bool:
@@ -161,7 +162,9 @@ class DealEngine:
         return any(loc in city for loc in LOCATIONS) or bool(facts.get("delivers_to_riga"))
 
     def handle_new(self, l: Listing) -> bool:
-        """Atgriež True, ja aizsūtīja paziņojumu par darījumu."""
+        """Atgriež True, ja aizsūtīja paziņojumu par darījumu.
+        Vērtējumu (arī negatīvu) atstāj self.last_eval, lai filtra ziņa var to parādīt."""
+        self.last_eval = None
         if not self.enabled or l.price is None or l.is_dealer:
             return False
         facts = self.analyse(l)
@@ -170,6 +173,8 @@ class DealEngine:
         if l.price > MAX_PRICE or l.price < 5 or not self.location_ok(l, facts):
             return False
         deal = self.evaluate(l, facts)
+        if deal is not None:
+            self.last_eval = (facts, deal)
         if deal is None or not deal.is_good:
             if deal:
                 log.info("Nav darījums: %s %.0f € -> ~%.0f € (%+.0f%%)", facts["model_key"], deal.price,
@@ -183,6 +188,21 @@ class DealEngine:
                      deal.resale, deal.margin * 100)
             return True
         return False
+
+
+def format_eval_line(facts: Dict[str, Any], d: Deal) -> str:
+    """Īss vērtējums filtra ziņai, ja tas nav darījums."""
+    e = html.escape
+    why = []
+    if d.new_min and d.price > d.new_min * MAX_NEW_RATIO:
+        why.append(f"{d.price / d.new_min * 100:.0f}% no jaunas cenas ({d.new_min:.0f} €)")
+    if d.margin < MIN_MARGIN or d.profit < MIN_PROFIT:
+        why.append(f"peļņa {d.profit:+.0f} € ({d.margin * 100:+.0f}%)")
+    line = (f"📉 <b>Nav darījums</b>: pārdot ~{d.resale:.0f} € · " + e(", ".join(why)) +
+            f" · pārliecība: {CONF_LV.get(d.confidence, d.confidence)}")
+    if d.verdict:
+        line += "\n🤖 " + e(d.verdict[:250])
+    return line
 
 
 def format_deal(l: Listing, facts: Dict[str, Any], d: Deal) -> str:

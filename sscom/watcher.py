@@ -7,6 +7,7 @@ from typing import List, Optional
 from sqlalchemy import select
 
 from . import config, db, dealer, filters, parser, telegram
+from . import deals as dealmod
 from .http import Client
 
 log = logging.getLogger(__name__)
@@ -67,7 +68,11 @@ class Watcher:
                 log.exception("Darījuma vērtēšana neizdevās: %s", l.url)
         if notify:
             f = filters.first_match(self.filters, l)
-            if f and telegram.send_listing(l, f"parauga filtrs: {f.name}"):
+            extra = None
+            last = getattr(self.deals, "last_eval", None) if self.deals is not None else None
+            if f and last:
+                extra = dealmod.format_eval_line(*last)
+            if f and telegram.send_listing(l, f"parauga filtrs: {f.name}", extra=extra):
                 self.store.mark_notified(l.ss_id, f.name)
                 log.info("Paziņots: %s (%s)", l.url, f.name)
         return l
