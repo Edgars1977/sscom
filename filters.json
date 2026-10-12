@@ -1,34 +1,44 @@
 {
-  "_info": "PIEMĒRI — nomaini pret saviem. Lauki: name, categories (pc | noutbooks | completing-pc), subcategories (video, cpu, ram, motherboards, ssd, ...), price_min, price_max, ram_min, keywords_any, keywords_none, enabled.",
+  "_info": "PARAUGI (budžets 700 €). Lauki: name, categories (pc | noutbooks | completing-pc), subcategories (video, cpu, ram, motherboards, ssd, ...), price_min, price_max, ram_min, keywords_any, keywords_none, include_dealers, enabled.",
   "filters": [
     {
-      "name": "Biznesa portatīvie līdz 200 €",
+      "name": "Biznesa portatīvie līdz 350 €",
       "categories": ["noutbooks"],
-      "price_max": 200,
+      "price_max": 350,
       "ram_min": 8,
-      "keywords_any": ["thinkpad", "latitude", "elitebook", "probook", "x390", "t480", "t490", "e15"],
+      "keywords_any": ["thinkpad", "latitude", "elitebook", "probook", "zbook", "precision", "x1 carbon"],
       "keywords_none": ["bojāts", "uz detaļām", "neieslēdzas", "сломан", "на запчасти"]
     },
     {
-      "name": "MacBook līdz 400 €",
+      "name": "MacBook līdz 700 €",
       "categories": ["noutbooks"],
-      "price_max": 400,
+      "price_max": 700,
       "keywords_any": ["macbook"],
       "keywords_none": ["icloud", "bloķēts", "на запчасти"]
     },
     {
-      "name": "RTX videokartes līdz 250 €",
-      "categories": ["completing-pc"],
-      "subcategories": ["video"],
-      "price_max": 250,
-      "keywords_any": ["rtx"]
+      "name": "Spēļu portatīvie līdz 700 €",
+      "categories": ["noutbooks"],
+      "price_min": 250,
+      "price_max": 700,
+      "keywords_any": ["rtx", "legion", "rog", "tuf", "omen", "victus", "nitro", "predator", "loq"],
+      "keywords_none": ["bojāts", "uz detaļām", "на запчасти"]
     },
     {
-      "name": "Datori ar i5/Ryzen līdz 250 €",
+      "name": "Videokartes līdz 700 €",
+      "categories": ["completing-pc"],
+      "subcategories": ["video"],
+      "price_min": 80,
+      "price_max": 700,
+      "keywords_any": ["rtx", "rx 6", "rx 7", "rx 9"]
+    },
+    {
+      "name": "Spēļu datori līdz 700 €",
       "categories": ["pc"],
-      "price_max": 250,
+      "price_min": 200,
+      "price_max": 700,
       "ram_min": 16,
-      "keywords_any": ["i5-1", "i7-1", "ryzen 5", "ryzen 7"]
+      "keywords_any": ["rtx", "rx 6", "rx 7", "rx 9", "ryzen 5 5", "ryzen 7", "i5-12", "i5-13", "i5-14", "i7-1"]
     }
   ]
 }
