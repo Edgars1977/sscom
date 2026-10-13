@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Set
 
 from sqlalchemy import (
     Column, DateTime, Float, Integer, MetaData, String, Table, Text, create_engine,
-    inspect, insert, select, text, update,
+    func, inspect, insert, select, text, update,
 )
 from sqlalchemy.engine import Engine
 
@@ -185,6 +185,36 @@ class Store:
                 c.execute(update(listings).where(listings.c.ss_id == ss_id)
                           .where(listings.c.city.is_(None)).values(city=city))
         return changed
+
+    def mark_missing(self, category: str, seen_ids: Set[str], cycles: int = 2) -> List:
+        """Aktīvajiem, kas šajā pilnajā pārbaudē nav redzēti: missed_cycles += 1.
+        Pēc `cycles` secīgām reizēm -> status=disappeared, disappeared_at=last_seen.
+        Atgriež tikko pazudušo rindas."""
+        L = listings
+        with self.engine.begin() as c:
+            rows = c.execute(select(L.c.ss_id, L.c.missed_cycles)
+                             .where(L.c.category == category, L.c.status == "active")).all()
+            missing = [r for r in rows if r.ss_id not in seen_ids]
+            gone_ids = [r.ss_id for r in missing if (r.missed_cycles or 0) + 1 >= cycles]
+            still = [r.ss_id for r in missing if r.ss_id not in set(gone_ids)]
+            if still:
+                c.execute(update(L).where(L.c.ss_id.in_(still))
+                          .values(missed_cycles=L.c.missed_cycles + 1))
+            if gone_ids:
+                c.execute(update(L).where(L.c.ss_id.in_(gone_ids)).values(
+                    status="disappeared", disappeared_at=L.c.last_seen,
+                    missed_cycles=L.c.missed_cycles + 1))
+                return c.execute(select(L).where(L.c.ss_id.in_(gone_ids))).all()
+        return []
+
+    def active_count(self, category: str, seen_within_days: int = 2) -> int:
+        """Aktīvie, kas redzēti nesen — pret tiem mēra, vai pilnā pārbaude bija pilnīga.
+        (Visi "aktīvie" der slikti: tur var būt sen pazuduši, vēl neatzīmēti.)"""
+        since = now() - timedelta(days=seen_within_days)
+        with self.engine.connect() as c:
+            return c.execute(select(func.count()).select_from(listings)
+                             .where(listings.c.category == category, listings.c.status == "active",
+                                    listings.c.last_seen >= since)).scalar() or 0
 
     def all_descriptions(self) -> List[Optional[str]]:
         with self.engine.connect() as c:

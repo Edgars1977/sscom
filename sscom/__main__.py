@@ -4,6 +4,7 @@
   python -m sscom full [kategorija]    — pilnā apstaigāšana (bez kategorijas = visas)
   python -m sscom test-filters         — parāda, kuri bāzes sludinājumi atbilst filtriem
   python -m sscom dealers [kategorija] — firmu atpazīšanas atskaite
+  python -m sscom report [dienas] [--send] — kopsavilkums (ar --send arī uz Telegram)
   python -m sscom migrate <mērķa_DB_URL> — pārkopē datus no DATABASE_URL uz citu DB (piem. Railway)
 """
 from __future__ import annotations
@@ -11,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 import time
 
@@ -61,6 +63,15 @@ def main() -> None:
 
     if cmd == "migrate":
         migrate(store, sys.argv[2])
+        return
+
+    if cmd == "report":
+        from . import report, telegram
+        days = int(next((a for a in sys.argv[2:] if a.isdigit()), "7"))
+        text = report.build(store, days)
+        print(re.sub(r"<[^>]+>", "", text))
+        if "--send" in sys.argv:
+            telegram.send_text(text)
         return
 
     if cmd == "dealers":

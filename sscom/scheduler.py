@@ -40,6 +40,7 @@ class Scheduler:
         }
         self.catchup_done: Optional[date] = None
         self.next_ai = time.monotonic() + 120
+        self.weekly_sent: Optional[date] = None
 
     def _rss_gap(self) -> float:
         return random.uniform(config.RSS_INTERVAL_MIN, config.RSS_INTERVAL_MAX)
@@ -61,6 +62,13 @@ class Scheduler:
             for c in config.CATEGORIES:
                 self.next_full[c] = time.monotonic() + self._full_gap()
             return
+
+        # Svētdienās 20:00 — iknedēļas kopsavilkums uz Telegram
+        if (t.weekday() == config.REPORT_WEEKDAY and t.hour == config.REPORT_HOUR
+                and self.weekly_sent != t.date()):
+            from . import report
+            telegram.send_text(report.build(self.w.store, 7))
+            self.weekly_sent = t.date()
 
         if not is_active(t):
             return

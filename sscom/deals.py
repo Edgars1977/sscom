@@ -29,15 +29,15 @@ log = logging.getLogger(__name__)
 
 MIN_MARGIN = float(os.getenv("DEAL_MIN_MARGIN", "0.20"))
 MIN_PROFIT = float(os.getenv("DEAL_MIN_PROFIT", "15"))
-MAX_PRICE = float(os.getenv("DEAL_MAX_PRICE", "500"))
+MAX_PRICE = float(os.getenv("DEAL_MAX_PRICE", "700"))
 # Edgara noteikums: mazlietotu vērts pirkt tikai par ~pusi no jaunas cenas (ja jaunā cena zināma)
 MAX_NEW_RATIO = float(os.getenv("DEAL_MAX_NEW_RATIO", "0.5"))
-ANALYSE_MAX_PRICE = float(os.getenv("DEAL_ANALYSE_MAX_PRICE", "750"))  # salīdzinājumiem analizējam plašāk
+ANALYSE_MAX_PRICE = float(os.getenv("DEAL_ANALYSE_MAX_PRICE", "1000"))  # salīdzinājumiem analizējam plašāk
 LOCATIONS = [x.strip().lower() for x in os.getenv("DEAL_LOCATIONS", "rīga").split(",") if x.strip()]
 # Izjaukšana prasa vairāk darba (6–8 sludinājumi, nedēļas) — tāpēc augstāks slieksnis
 PARTOUT_MIN_MARGIN = float(os.getenv("DEAL_PARTOUT_MIN_MARGIN", "0.30"))
 PARTOUT_MIN_PROFIT = float(os.getenv("DEAL_PARTOUT_MIN_PROFIT", "60"))
-USED_FLOOR_OF_NEW = 0.55  # lietota RAM/SSD vismaz tik no jaunas cenas
+USED_FLOOR_OF_NEW = 0.55  # lietota DDR4/DDR5 RAM vismaz tik no jaunas cenas
 COMPS_MIN = 3
 COMPS_DAYS = 120
 # ja lietota prece maksā >= 85% no jaunas lētākās cenas, peļņas praktiski nevar būt — GPT nesaucam
@@ -200,9 +200,10 @@ class DealEngine:
             comps = self.comparables(key, l.ss_id) if known else []
             item = {"type": c["type"], "key": key, "ss_com_prices": comps[:15]}
             # maz salīdzinājumu -> jaunā cena LV kā atskaites punkts (kešots 7 dienas)
-            if known and len(comps) < COMPS_MIN and c["type"] in ("cpu", "gpu", "motherboard", "ram", "storage", "psu"):
+            # diskiem NĒ: "hdd 480gb" ir pārāk vispārīgs, cenueksperts atrod servera diskus par 700 €
+            if known and len(comps) < COMPS_MIN and c["type"] in ("cpu", "gpu", "motherboard", "ram", "psu"):
                 new = self.prices.get(key)
-                if new and new.n:
+                if new and new.n >= 3:
                     item["new_price_latvia_min_eur"] = new.min_price
             comps_in.append(item)
         if len(comps_in) < 3:
@@ -214,8 +215,9 @@ class DealEngine:
         parts = []
         for c in comps_in:
             price = by_key.get(c["key"], 0.0)
-            # RAM/SSD vēl ražo, un 2026. gadā tie ir dārgi; GPT tos mēdz novērtēt par zemu
-            if c["type"] in ("ram", "storage") and not c["ss_com_prices"] and c.get("new_price_latvia_min_eur"):
+            # DDR4/DDR5 vēl ražo, un 2026. gadā tā ir dārga; GPT to mēdz novērtēt par zemu
+            if (c["type"] == "ram" and re.search(r"ddr[45]", c["key"]) and not c["ss_com_prices"]
+                    and c.get("new_price_latvia_min_eur")):
                 price = max(price, c["new_price_latvia_min_eur"] * USED_FLOOR_OF_NEW)
             parts.append({"type": c["type"], "key": c["key"], "price": round(price),
                           "comps": len(c["ss_com_prices"])})

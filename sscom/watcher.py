@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
+from html import escape as html_escape
 from typing import List, Optional
 
 from sqlalchemy import select
@@ -123,9 +125,12 @@ class Watcher:
         log.info("[%s] pilnā apstaigāšana: %d lapas, bāzē %d", category, last, len(known_ids))
 
         rows: List[parser.Listing] = []
+        failed_pages = 0
+        active_before = self.store.active_count(category)
         for page in range(1, last + 1):
             html = first if page == 1 else self.client.get(config.list_url(category, page))
             if html is None:
+                failed_pages += 1
                 continue
             page_rows = parser.parse_list_page(html, category)
             fresh = [r for r in page_rows if r.ss_id not in seen]
@@ -143,11 +148,36 @@ class Watcher:
                 if self.process_new(r.url, category, notify, known_ids):
                     new += 1
 
-        self.store.log(category, "full", found=len(rows), new=new,
+        # Pazušana: tikai pēc pilnīgas pārbaudes, citādi ss.com kļūme "nogalinātu" visus
+        disappeared = 0
+        complete = failed_pages == 0 and len(rows) >= 0.8 * active_before
+        if complete:
+            gone = self.store.mark_missing(category, {r.ss_id for r in rows})
+            disappeared = len(gone)
+            self._notify_gone(gone)
+        else:
+            log.warning("[%s] nepilnīga pārbaude (%d kļūdainas lapas, %d no ~%d) — pazušanu neatzīmēju",
+                        category, failed_pages, len(rows), active_before)
+
+        self.store.log(category, "full", found=len(rows), new=new, disappeared=disappeared,
                        errors=self.client.errors - errors_before)
+        if disappeared:
+            log.info("[%s] pazuduši: %d", category, disappeared)
         self.reclassify_dealers()
         log.info("[%s] pilnā apstaigāšana: %d sludinājumi, %d jauni", category, len(rows), new)
         return new
+
+    def _notify_gone(self, rows) -> None:
+        """Ja pazudis sludinājums, par kuru nesen sūtījām ziņu — pasakām, lai netērē laiku zvanot."""
+        recent = db.now() - timedelta(days=7)
+        fresh = db.now() - timedelta(days=1)
+        for r in rows:
+            if not r.notified_at or r.notified_at < recent or r.last_seen < fresh:
+                continue
+            hours = (r.last_seen - r.first_seen).total_seconds() / 3600
+            telegram.send_text(
+                f"❌ <b>Pazudis</b> ({hours:.0f} h pēc ievietošanas): {r.price or 0:.0f} € · "
+                f'<a href="{html_escape(r.url)}">{html_escape((r.title or "")[:80])}</a>')
 
     # ------------------------------------------------------------ firmas
 

@@ -49,7 +49,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 TIMEZONE = os.getenv("TIMEZONE", "Europe/Riga")
 CATCHUP_HOUR = int(os.getenv("CATCHUP_HOUR", "7"))     # viena pilnā pārbaude no rīta
 ACTIVE_START = int(os.getenv("ACTIVE_START", "8"))     # no šī brīža standarta režīms
-ACTIVE_END = int(os.getenv("ACTIVE_END", "21"))        # no šī brīža izslēgts
+ACTIVE_END = int(os.getenv("ACTIVE_END", "23"))        # no šī brīža izslēgts
 
 # RSS katrai kategorijai atsevišķi (sekundes)
 RSS_INTERVAL_MIN = float(os.getenv("RSS_INTERVAL_MIN", "60"))
@@ -57,5 +57,8 @@ RSS_INTERVAL_MAX = float(os.getenv("RSS_INTERVAL_MAX", "150"))
 # Pilnā sarakstu apstaigāšana (minūtes)
 FULL_INTERVAL_MIN = float(os.getenv("FULL_INTERVAL_MIN", "30"))
 FULL_INTERVAL_MAX = float(os.getenv("FULL_INTERVAL_MAX", "90"))
+# Iknedēļas atskaite (0 = pirmdiena ... 6 = svētdiena)
+REPORT_WEEKDAY = int(os.getenv("REPORT_WEEKDAY", "6"))
+REPORT_HOUR = int(os.getenv("REPORT_HOUR", "20"))
 # Cik ilgi gaidīt pēc CircuitOpen (minūtes)
 CIRCUIT_PAUSE = float(os.getenv("CIRCUIT_PAUSE", "30"))
