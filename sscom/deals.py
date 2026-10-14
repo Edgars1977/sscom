@@ -261,7 +261,68 @@ class DealEngine:
         if telegram.send_listing(l, "", text="\n".join(lines)):
             with self.store.engine.begin() as c:
                 c.execute(update(db.listings).where(db.listings.c.ss_id == l.ss_id).values(
-                    notified_at=db.now(), deal_sent_at=db.now(), matched_filter="AI mana cena"))
+                    notified_at=db.now(), notified_price=l.price, deal_sent_at=db.now(), matched_filter="AI mana cena"))
+            return True
+        return False
+
+    def handle_price_drop(self, ss_id: str, old_price: float, new_price: float) -> bool:
+        """📉 Zināmam sludinājumam samazināta cena — vai tagad tas ir darījums?
+        Atgriež True, ja aizsūtīja ziņu."""
+        from . import guide
+        L = db.listings
+        with self.store.engine.connect() as c:
+            r = c.execute(select(L).where(L.c.ss_id == ss_id)).first()
+        if r is None or r.is_dealer or r.status == "no_price" or not self.enabled:
+            return False
+        if r.notified_price is not None and new_price >= r.notified_price:
+            return False  # par šo (vai zemāku) cenu jau ziņots
+        l = db.row_to_listing(r)
+        l.price = new_price
+        facts = json.loads(r.ai_json) if r.ai_json else self.analyse(l)
+        if not facts or l.is_dealer:
+            return False
+        if not self.location_ok(l, facts) or new_price > MAX_PRICE or new_price < 5:
+            return False
+
+        key = guide.guide_key(facts)
+        target = guide.target_for(self.store, key)
+        with self.store.engine.connect() as c:
+            g = c.execute(select(guide.price_guide).where(guide.price_guide.c.guide_key == key)).first() if key else None
+        hit_target = target is not None and new_price <= target
+        hit_guide = g is not None and g.n >= COMPS_MIN and new_price <= g.buy_max
+
+        deal = None
+        # GPT novērtējumu tērējam tikai, ja jaunā cena vispār var būt izdevīga
+        if not (g is not None and g.n >= COMPS_MIN and new_price > g.price_median):
+            deal = self.evaluate(l, facts)
+        good = deal is not None and deal.is_good
+        if not (good or hit_target or hit_guide):
+            log.info("Cena samazināta, bet nav darījums: %s %.0f→%.0f €", l.url, old_price, new_price)
+            return False
+
+        e = html.escape
+        drop = (old_price - new_price) / old_price * 100 if old_price else 0
+        head = f"📉 <b>Cena samazināta: {old_price:.0f} → {new_price:.0f} €</b> (−{drop:.0f}%)"
+        if good:
+            body = format_deal(l, facts, deal)
+        else:
+            lines = [f"<b>{e(l.title[:120])}</b>", e(key or facts.get("model_key") or "")]
+            if hit_target:
+                lines.append(f"🎯 zem tavas cenas {target:.0f} €")
+            if g is not None:
+                lines.append(f"📊 ss.com {g.n}×, mediāna {g.price_median:.0f} € · pirkt līdz {g.buy_max:.0f} €"
+                             + (f" · pārdodas ~{g.days_to_sell:.0f} d" if g.days_to_sell else ""))
+            if facts.get("defects"):
+                lines.append("⚠️ " + e(facts["defects"][:150]))
+            lines.append(f"📍 {e(l.city or '?')}")
+            lines.append(f'<a href="{e(l.url)}">Atvērt ss.com</a>')
+            body = "\n".join(lines)
+        if telegram.send_listing(l, "", text=head + "\n" + body):
+            with self.store.engine.begin() as c:
+                c.execute(update(L).where(L.c.ss_id == ss_id).values(
+                    notified_at=db.now(), notified_price=new_price, deal_sent_at=db.now(),
+                    matched_filter="AI cena samazināta"))
+            log.info("Cena samazināta → ziņa: %s %.0f→%.0f €", l.url, old_price, new_price)
             return True
         return False
 
@@ -292,7 +353,7 @@ class DealEngine:
                 if po.is_good and telegram.send_listing(l, "", text=format_partout(l, facts, po)):
                     with self.store.engine.begin() as c:
                         c.execute(update(db.listings).where(db.listings.c.ss_id == l.ss_id).values(
-                            deal_sent_at=db.now(), notified_at=db.now(), matched_filter="AI pa daļām"))
+                            deal_sent_at=db.now(), notified_at=db.now(), notified_price=l.price, matched_filter="AI pa daļām"))
                     log.info("Pa daļām: %s %.0f € -> ~%.0f €", l.url, po.price, po.total)
                     return True
         if deal is None or not deal.is_good:
@@ -303,7 +364,7 @@ class DealEngine:
         if telegram.send_listing(l, "", extra=None, text=format_deal(l, facts, deal)):
             with self.store.engine.begin() as c:
                 c.execute(update(db.listings).where(db.listings.c.ss_id == l.ss_id)
-                          .values(deal_sent_at=db.now(), notified_at=db.now(), matched_filter="AI darījums"))
+                          .values(deal_sent_at=db.now(), notified_at=db.now(), notified_price=l.price, matched_filter="AI darījums"))
             log.info("Darījums: %s %.0f € -> ~%.0f € (%+.0f%%)", facts["model_key"], deal.price,
                      deal.resale, deal.margin * 100)
             return True

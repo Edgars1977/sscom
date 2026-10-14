@@ -60,6 +60,7 @@ listings = Table(
     Column("deal_note", Text),
     Column("deal_sent_at", DateTime),
     Column("guide_key", String(120), index=True),   # cenu ceļveža grupa (guide.py)
+    Column("notified_price", Float),                # cena, par kuru pēdējo reizi ziņojām
     Column("partout_est", Float),
     Column("partout_json", Text),
 )
@@ -138,6 +139,13 @@ class Store:
     def known_urls(self, category: str) -> Set[str]:
         with self.engine.connect() as c:
             return set(c.execute(select(listings.c.url).where(listings.c.category == category)).scalars())
+
+    def known_by_url(self, category: str) -> Dict[str, tuple]:
+        """url -> (ss_id, pēdējā zināmā cena)"""
+        with self.engine.connect() as c:
+            rows = c.execute(select(listings.c.url, listings.c.ss_id, listings.c.price)
+                             .where(listings.c.category == category))
+            return {r.url: (r.ss_id, r.price) for r in rows}
 
     def known_ids(self, category: str) -> Dict[str, Optional[float]]:
         """ss_id -> pēdējā zināmā cena."""

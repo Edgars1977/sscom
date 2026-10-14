@@ -92,9 +92,17 @@ class Watcher:
             self.store.log(category, "rss", errors=self.client.errors - errors_before + 1)
             return 0
         items = parser.parse_rss(xml, category)
-        known_urls = self.store.known_urls(category)
+        known = self.store.known_by_url(category)
+        known_urls = set(known)
         notify = bool(known_urls)  # tukša bāze = sākumstāvoklis, nespamojam
         new_items = [i for i in items if i.url not in known_urls]
+        # Pacelts sludinājums ar zemāku cenu — pamanām uzreiz, negaidot pilno pārbaudi
+        for item in items:
+            if item.url in known and item.price is not None:
+                ss_id, old = known[item.url]
+                if old is not None and item.price < old:
+                    self.store.touch(ss_id, item.price, old)
+                    self._price_drop(ss_id, old, item.price)
         new = 0
         known_ids = self.store.known_ids(category)
         for item in reversed(new_items):  # vecākie vispirms
@@ -141,7 +149,10 @@ class Watcher:
 
         for r in rows:
             if r.ss_id in known_ids:
-                self.store.touch(r.ss_id, r.price, known_ids[r.ss_id], city=r.city)
+                old = known_ids[r.ss_id]
+                if self.store.touch(r.ss_id, r.price, old, city=r.city) and notify \
+                        and old is not None and r.price is not None and r.price < old:
+                    self._price_drop(r.ss_id, old, r.price)
             elif fetch_details:
                 if r.price is None:
                     continue  # sarakstā jau redzams, ka nav cenas — neveram vaļā
@@ -166,6 +177,14 @@ class Watcher:
         self.reclassify_dealers()
         log.info("[%s] pilnā apstaigāšana: %d sludinājumi, %d jauni", category, len(rows), new)
         return new
+
+    def _price_drop(self, ss_id: str, old: float, new: float) -> None:
+        if self.deals is None or not self.deals.enabled:
+            return
+        try:
+            self.deals.handle_price_drop(ss_id, old, new)
+        except Exception:  # AI/cenu kļūda nedrīkst apturēt skrāpi
+            log.exception("Cenas samazinājuma vērtēšana neizdevās: %s", ss_id)
 
     def _notify_gone(self, rows) -> None:
         """Ja pazudis sludinājums, par kuru nesen sūtījām ziņu — pasakām, lai netērē laiku zvanot."""
