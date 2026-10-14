@@ -11,6 +11,7 @@ from flask import Flask, Response, jsonify, request
 from sqlalchemy import or_, select
 
 from . import db, guide, inventory
+from .ai import AI
 
 log = logging.getLogger(__name__)
 
@@ -81,6 +82,7 @@ def create_app(store: db.Store) -> Flask:
             store, title=d["title"], total_price=float(d["total_price"]), items=d.get("items") or [],
             bought_at=date.fromisoformat(d["bought_at"]) if d.get("bought_at") else None,
             source_url=d.get("source_url"), ss_id=d.get("ss_id"), note=d.get("note"))
+        inventory.appraise(store, pid, AI(store))  # uzreiz tirgus cenas + sadale
         return jsonify(id=pid)
 
     @app.post("/api/items/<int:item_id>")
@@ -93,6 +95,33 @@ def create_app(store: db.Store) -> Flask:
             d["sold_at"] = date.fromisoformat(d["sold_at"])
         inventory.update_item(store, item_id, **d)
         return jsonify(ok=True)
+
+    @app.post("/api/purchases/<int:pid>")
+    def api_edit_purchase(pid: int):
+        d = request.get_json(force=True)
+        if "total_price" in d:
+            d["total_price"] = float(d["total_price"] or 0)
+        if d.get("bought_at"):
+            d["bought_at"] = date.fromisoformat(d["bought_at"])
+        inventory.update_purchase(store, pid, **d)
+        return jsonify(ok=True)
+
+    @app.post("/api/purchases/<int:pid>/items")
+    def api_add_item(pid: int):
+        d = request.get_json(force=True)
+        est = d.get("est_value")
+        iid = inventory.add_item(store, pid, d["name"], float(est) if est not in (None, "") else None)
+        inventory.appraise(store, pid, AI(store), only_missing=True)
+        return jsonify(id=iid)
+
+    @app.delete("/api/items/<int:item_id>")
+    def api_del_item(item_id: int):
+        inventory.delete_item(store, item_id)
+        return jsonify(ok=True)
+
+    @app.post("/api/purchases/<int:pid>/appraise")
+    def api_appraise(pid: int):
+        return jsonify(updated=inventory.appraise(store, pid, AI(store)))
 
     @app.post("/api/purchases/<int:pid>/reallocate")
     def api_realloc(pid: int):
@@ -174,23 +203,38 @@ let gt;function loadGuide(){const p=new URLSearchParams({q:$('#q').value,type:$(
  document.querySelectorAll('input.t').forEach(i=>i.onchange=()=>api('/api/target',{method:'POST',body:JSON.stringify({guide_key:i.dataset.k,target_price:i.value})}).then(()=>i.style.borderColor='var(--ok)'));});}
 ['#q','#type','#min2'].forEach(s=>$(s).addEventListener('input',()=>{clearTimeout(gt);gt=setTimeout(loadGuide,250)}));
 const ST={stock:'noliktavā',listed:'izlikts',sold:'pārdots'};
-function loadInv(){api('/api/purchases').then(d=>{$('#st').innerHTML=[['Ieguldīts',d.invested],['Noliktavā (pašizm.)',d.in_stock],['Pārdots par',d.sold_revenue],['Peļņa',d.sold_profit]]
+function loadInv(){api('/api/purchases').then(d=>{
+ const unsold=d.purchases.flatMap(p=>p.items).filter(i=>i.status!=='sold');
+ const mkt=unsold.reduce((s,i)=>s+(i.est_value||i.market_value||0),0);
+ $('#st').innerHTML=[['Ieguldīts',d.invested],['Noliktavā (pašizm.)',d.in_stock],['Noliktavā (tirgus)',mkt],['Pārdots par',d.sold_revenue],['Peļņa',d.sold_profit]]
  .map(([l,v])=>`<div class="card stat"><span class="mut">${l}</span><b class="${l==='Peļņa'?(v>=0?'ok':'bad'):''}">${eur(v)}</b></div>`).join('');
- $('#pl').innerHTML=d.purchases.map(p=>`<div class="card"><div class="row"><b style="flex:1">${esc(p.title)}</b><span class="pill">${p.kind==='kit'?'komplekts':'detaļa'}</span>
- <span class="mut">${p.bought_at} · ${eur(p.total_price)}</span>${p.source_url?`<a href="${esc(p.source_url)}" target="_blank">ss.com</a>`:''}</div>
- <div class="mut">Pārdots ${p.sold_count}/${p.item_count} · ieņemts ${eur(p.revenue)} · peļņa <b class="${p.profit>=0?'ok':'bad'}">${eur(p.profit)}</b></div>
- <div class="tbl"><table><thead><tr><th>Detaļa</th><th class="n">Vērtība</th><th class="n">Pašizm.</th><th>Statuss</th><th class="n">Izlikts</th><th class="n">Pārdots</th><th class="n">Peļņa</th></tr></thead><tbody>
- ${p.items.map(i=>`<tr data-i="${i.id}"><td>${esc(i.name)}<div class="mut">${esc(i.guide_key||'')}</div></td>
- <td class="n"><input class="t" data-f="est_value" type="number" value="${i.est_value??''}"></td><td class="n">${eur(i.cost)}</td>
+ $('#pl').innerHTML=d.purchases.map(p=>{const pm=p.items.filter(i=>i.status!=='sold').reduce((s,i)=>s+(i.est_value||i.market_value||0),0);
+ return `<div class="card" data-p="${p.id}">
+ <div class="row"><input data-pf="title" value="${esc(p.title)}" style="flex:1;min-width:200px;font-weight:600">
+  <label class="mut">Samaksāju <input data-pf="total_price" type="number" step="0.01" value="${p.total_price}" class="t" style="width:80px"> €</label>
+  <input data-pf="bought_at" type="date" value="${p.bought_at}">${p.source_url?`<a href="${esc(p.source_url)}" target="_blank">ss.com</a>`:''}</div>
+ <div class="mut">Pārdots ${p.sold_count}/${p.item_count} · ieņemts ${eur(p.revenue)} · peļņa <b class="${p.profit>=0?'ok':'bad'}">${eur(p.profit)}</b>
+  · nepārdotais tirgū ~${eur(pm)}</div>
+ <div class="tbl"><table><thead><tr><th>Detaļa</th><th class="n">Tirgus tagad</th><th class="n">Vērtība</th><th class="n">Pašizm.</th><th>Statuss</th><th class="n">Izlikts</th><th class="n">Pārdots</th><th class="n">Peļņa</th><th></th></tr></thead><tbody>
+ ${p.items.map(i=>{const pot=i.status!=='sold'&&(i.est_value||i.market_value)?(i.est_value||i.market_value)-i.cost:null;
+ return `<tr data-i="${i.id}"><td><input data-f="name" value="${esc(i.name)}" style="min-width:170px"><div class="mut">${esc(i.guide_key||'')}</div></td>
+ <td class="n">${eur(i.market_value)}<div class="mut">${esc(i.market_src||'')}</div></td>
+ <td class="n"><input class="t" data-f="est_value" type="number" value="${i.est_value??''}" placeholder="${i.market_value??''}" title="Tukšs = tirgus cena"></td><td class="n">${eur(i.cost)}</td>
  <td><select data-f="status">${Object.entries(ST).map(([k,v])=>`<option value="${k}" ${k===i.status?'selected':''}>${v}</option>`).join('')}</select></td>
  <td class="n"><input class="t" data-f="listed_price" type="number" value="${i.listed_price??''}"></td>
  <td class="n"><input class="t" data-f="sold_price" type="number" value="${i.sold_price??''}"></td>
- <td class="n ${i.profit==null?'':(i.profit>=0?'ok':'bad')}">${eur(i.profit)}</td></tr>`).join('')}</tbody></table></div>
- <div class="row"><button data-re="${p.id}">Pārdalīt pašizmaksu pēc vērtībām</button><button data-del="${p.id}" class="bad">Dzēst</button></div></div>`).join('')||'<p class="mut">Vēl nav pirkumu. Pievieno cilnē "+ Pirkums".</p>';
+ <td class="n ${i.profit==null?'mut':(i.profit>=0?'ok':'bad')}">${i.profit!=null?eur(i.profit):(pot!=null?'~'+eur(pot):'—')}</td>
+ <td><button data-di="${i.id}" title="Dzēst detaļu">✕</button></td></tr>`}).join('')}</tbody></table></div>
+ <div class="row"><button data-ap="${p.id}">💰 Novērtēt tirgus cenas</button><button data-ai="${p.id}">+ detaļa</button><button data-re="${p.id}">Pārdalīt pašizmaksu</button><span style="flex:1"></span><button data-del="${p.id}" class="bad">Dzēst pirkumu</button></div></div>`}).join('')||'<p class="mut">Vēl nav pirkumu. Pievieno cilnē "+ Pirkums".</p>';
+ const post=(u,b)=>api(u,{method:'POST',body:JSON.stringify(b||{})});
+ document.querySelectorAll('[data-pf]').forEach(el=>el.onchange=()=>{const b={};b[el.dataset.pf]=el.value;post('/api/purchases/'+el.closest('[data-p]').dataset.p,b).then(loadInv)});
  document.querySelectorAll('tr[data-i] [data-f]').forEach(el=>el.onchange=()=>{const b={};b[el.dataset.f]=el.value;
-  if(el.dataset.f==='sold_price'&&el.value)b.status='sold';api('/api/items/'+el.closest('tr').dataset.i,{method:'POST',body:JSON.stringify(b)}).then(loadInv)});
- document.querySelectorAll('[data-re]').forEach(b=>b.onclick=()=>api(`/api/purchases/${b.dataset.re}/reallocate`,{method:'POST'}).then(loadInv));
- document.querySelectorAll('[data-del]').forEach(b=>b.onclick=()=>confirm('Dzēst šo pirkumu?')&&api('/api/purchases/'+b.dataset.del,{method:'DELETE'}).then(loadInv));});}
+  if(el.dataset.f==='sold_price'&&el.value)b.status='sold';post('/api/items/'+el.closest('tr').dataset.i,b).then(loadInv)});
+ document.querySelectorAll('[data-di]').forEach(b=>b.onclick=()=>confirm('Dzēst šo detaļu?')&&api('/api/items/'+b.dataset.di,{method:'DELETE'}).then(loadInv));
+ document.querySelectorAll('[data-ap]').forEach(b=>b.onclick=()=>{b.disabled=true;b.textContent='Vērtē…';post(`/api/purchases/${b.dataset.ap}/appraise`).then(loadInv)});
+ document.querySelectorAll('[data-ai]').forEach(b=>b.onclick=()=>{const n=prompt('Detaļa (piem. Chieftec 500W, GTX 1050 Ti 4GB):');if(n)post(`/api/purchases/${b.dataset.ai}/items`,{name:n}).then(loadInv)});
+ document.querySelectorAll('[data-re]').forEach(b=>b.onclick=()=>post(`/api/purchases/${b.dataset.re}/reallocate`).then(loadInv));
+ document.querySelectorAll('[data-del]').forEach(b=>b.onclick=()=>confirm('Dzēst visu pirkumu?')&&api('/api/purchases/'+b.dataset.del,{method:'DELETE'}).then(loadInv));});}
 function itemRow(i={}){const d=document.createElement('div');d.className='row';d.innerHTML=`<input placeholder="Detaļa (piem. GTX 1050 Ti 4GB)" value="${esc(i.name||'')}" style="flex:1;min-width:180px" data-n>
  <input type="number" placeholder="Vērtība €" value="${i.est_value??''}" style="width:110px" data-v><input type="hidden" value="${esc(i.item_type||'')}" data-ty><input type="hidden" value="${esc(i.guide_key||'')}" data-g><button>✕</button>`;
  d.querySelector('button').onclick=()=>d.remove();$('#items').append(d);}

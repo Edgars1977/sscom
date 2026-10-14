@@ -98,9 +98,9 @@ def guide_key(facts: Dict[str, Any], text: str = "") -> Optional[str]:
     if t == "storage":
         size = facts.get("storage_gb")
         if not size:
-            m = re.search(r"(\d+(?:[.,]\d+)?)\s*(tb|gb)", key)
+            m = re.search(r"(\d+(?:[.,]\d+)?)\s*(tb|gb|t|g)\b", key)
             if m:
-                size = float(m.group(1).replace(",", ".")) * (1000 if m.group(2) == "tb" else 1)
+                size = float(m.group(1).replace(",", ".")) * (1000 if m.group(2).startswith("t") else 1)
         if not size:
             return None
         kind = "NVMe" if re.search(r"nvme|m\.?2|pcie|gen\s?[345]|nv[1-3]\b|sn\d{3,4}|\b9[789]0\b|crucial\s*p\d{1,3}\b|"

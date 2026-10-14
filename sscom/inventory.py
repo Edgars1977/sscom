@@ -44,7 +44,45 @@ purchase_items = Table(
     Column("sold_price", Float),
     Column("sold_at", Date),
     Column("note", Text),
+    Column("market_value", Float),                       # tirgus cena tagad (ceļvedis vai AI)
+    Column("market_src", String(40)),                    # "ss.com 6×" / "AI"
+    Column("market_at", DateTime),
 )
+
+# Detaļas tips no nosaukuma (ja ievadīts ar roku)
+_TYPE_RES = [
+    ("gpu", r"\b(rtx|gtx|gt\s?\d|rx\s?\d|radeon|quadro|geforce|arc\s?a\d)"),
+    ("cpu", r"\b(i[3579][\s-]?\d{3,5}|ryzen|xeon|pentium|celeron|athlon|core\s?ultra|fx[\s-]?\d{4})"),
+    ("ram", r"\bddr\s?[2-5]|\bram\b|operat[iī]v"),
+    ("storage", r"\b(ssd|hdd|nvme|m\.2|\d+\s?tb\b|\d{3,4}\s?gb\s?(ssd|hdd))"),
+    ("psu", r"\b(psu|barošan|блок пит|\d{3,4}\s?w\b)"),
+    ("motherboard", r"\b(mātesplat|matesplat|motherboard|plate|[abhzxq]\d{2,3}[m]?\b)"),
+    ("cooler", r"\b(dzes|cooler|aio|ventil|кулер)"),
+    ("case", r"\b(korpus|case|корпус)"),
+]
+
+
+def infer_type(name: str) -> Optional[str]:
+    low = (name or "").lower()
+    for t, rx in _TYPE_RES:
+        if re.search(rx, low):
+            return t
+    return None
+
+
+def item_key(name: str, item_type: Optional[str]) -> Optional[str]:
+    t = item_type or infer_type(name)
+    return guide.guide_key({"item_type": t, "model_key": (name or "").lower()}, name or "") if t else None
+
+
+def market_lookup(store: db.Store, key: Optional[str]):
+    """Ceļveža rinda šai grupai: precīzi vai ar to sākas (GTX 750 TI -> GTX 750 TI 2GB). Lielākā n uzvar."""
+    if not key:
+        return None
+    G = guide.price_guide
+    with store.engine.connect() as c:
+        rows = c.execute(select(G).where((G.c.guide_key == key) | G.c.guide_key.like(key.replace("%", "") + " %"))).all()
+    return max(rows, key=lambda r: (r.guide_key == key, r.n)) if rows else None
 
 
 def allocate(total: float, values: List[Optional[float]]) -> List[float]:
@@ -117,21 +155,29 @@ def add_purchase(store: db.Store, title: str, total_price: float, items: List[Di
 def update_item(store: db.Store, item_id: int, **fields) -> None:
     allowed = {"name", "status", "listed_price", "sold_price", "sold_at", "note", "est_value", "cost"}
     values = {k: v for k, v in fields.items() if k in allowed}
+    if values.get("name"):
+        values["item_type"] = infer_type(values["name"])
+        values["guide_key"] = item_key(values["name"], values["item_type"])
+        values.update(market_value=None, market_src=None)
     if values.get("status") == "sold" and not values.get("sold_at"):
         values["sold_at"] = date.today()
     if values:
         with store.engine.begin() as c:
             c.execute(purchase_items.update().where(purchase_items.c.id == item_id).values(**values))
+            pid = c.execute(select(purchase_items.c.purchase_id).where(purchase_items.c.id == item_id)).scalar()
+        if pid and ("est_value" in values or "name" in values):
+            reallocate(store, pid)
 
 
 def reallocate(store: db.Store, purchase_id: int) -> None:
     """Pēc est_value labošanas — pārdala pirkuma cenu pa detaļām no jauna."""
     with store.engine.begin() as c:
         total = c.execute(select(purchases.c.total_price).where(purchases.c.id == purchase_id)).scalar()
-        rows = c.execute(select(purchase_items.c.id, purchase_items.c.est_value)
+        rows = c.execute(select(purchase_items.c.id, purchase_items.c.est_value, purchase_items.c.market_value)
                          .where(purchase_items.c.purchase_id == purchase_id)
                          .order_by(purchase_items.c.id)).all()
-        for (iid, _), cost in zip(rows, allocate(total or 0, [r.est_value for r in rows])):
+        values = [r.est_value if r.est_value else r.market_value for r in rows]
+        for (iid, _, _), cost in zip(rows, allocate(total or 0, values)):
             c.execute(purchase_items.update().where(purchase_items.c.id == iid).values(cost=cost))
 
 
@@ -167,3 +213,69 @@ def overview(store: db.Store) -> Dict[str, Any]:
         out.append(d)
     return {"purchases": out, "invested": invested, "in_stock": in_stock,
             "sold_revenue": sold_rev, "sold_profit": sold_rev - sold_cost}
+
+
+def update_purchase(store: db.Store, purchase_id: int, **fields) -> None:
+    allowed = {"title", "total_price", "bought_at", "note", "source_url"}
+    values = {k: v for k, v in fields.items() if k in allowed}
+    if values:
+        with store.engine.begin() as c:
+            c.execute(purchases.update().where(purchases.c.id == purchase_id).values(**values))
+            n = c.execute(select(purchase_items.c.id).where(purchase_items.c.purchase_id == purchase_id)).all()
+            c.execute(purchases.update().where(purchases.c.id == purchase_id)
+                      .values(kind="kit" if len(n) > 1 else "single"))
+    reallocate(store, purchase_id)
+
+
+def add_item(store: db.Store, purchase_id: int, name: str, est_value: Optional[float] = None) -> int:
+    t = infer_type(name)
+    with store.engine.begin() as c:
+        iid = c.execute(purchase_items.insert().values(
+            purchase_id=purchase_id, name=name[:200], item_type=t, guide_key=item_key(name, t),
+            est_value=est_value, cost=0, status="stock")).inserted_primary_key[0]
+    update_purchase(store, purchase_id)
+    return iid
+
+
+def delete_item(store: db.Store, item_id: int) -> None:
+    with store.engine.begin() as c:
+        pid = c.execute(select(purchase_items.c.purchase_id).where(purchase_items.c.id == item_id)).scalar()
+        c.execute(purchase_items.delete().where(purchase_items.c.id == item_id))
+    if pid:
+        update_purchase(store, pid)
+
+
+def appraise(store: db.Store, purchase_id: int, ai=None, only_missing: bool = False) -> int:
+    """Tirgus cena katrai nepārdotai detaļai: ceļvedis (≥2 sludinājumi) vai GPT. Pēc tam pārdala.
+    only_missing: vērtē tikai detaļas bez tirgus cenas (piem. tikko pievienotu)."""
+    with store.engine.connect() as c:
+        items = c.execute(select(purchase_items).where(purchase_items.c.purchase_id == purchase_id)
+                          .order_by(purchase_items.c.id)).all()
+    updates, ask = {}, []
+    for i in items:
+        if i.status == "sold" or (only_missing and i.market_value is not None):
+            continue
+        key = item_key(i.name, i.item_type) or i.guide_key  # no nosaukuma — grupēšana var būt uzlabota
+        g = market_lookup(store, key)
+        if g is not None and g.n >= 2:
+            updates[i.id] = dict(market_value=round(g.price_median), market_src=f"ss.com {g.n}× ({g.guide_key})",
+                                 guide_key=key)
+        else:
+            ask.append((i, key, g))
+    if ask and ai is not None and ai.enabled:
+        comps = [{"type": i.item_type or infer_type(i.name) or "other", "key": i.name,
+                  "ss_com_prices": [g.price_median] if g is not None else []} for i, _, g in ask]
+        with store.engine.connect() as c:
+            total = c.execute(select(purchases.c.total_price).where(purchases.c.id == purchase_id)).scalar()
+        est = ai.estimate_parts(comps, total or 0)
+        if est:
+            by_name = {p["key"]: float(p["used_price_eur"]) for p in est["parts"]}
+            for i, key, _ in ask:
+                if i.name in by_name:
+                    updates[i.id] = dict(market_value=round(by_name[i.name]), market_src="AI", guide_key=key)
+    now = db.now()
+    with store.engine.begin() as c:
+        for iid, v in updates.items():
+            c.execute(purchase_items.update().where(purchase_items.c.id == iid).values(market_at=now, **v))
+    reallocate(store, purchase_id)
+    return len(updates)
