@@ -4,3 +4,5 @@ python-dotenv>=1.0
 sqlalchemy>=2.0
 psycopg[binary]>=3.1
 tzdata
+flask>=3.0
+waitress>=3.0

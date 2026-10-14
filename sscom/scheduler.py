@@ -41,6 +41,8 @@ class Scheduler:
         self.catchup_done: Optional[date] = None
         self.next_ai = time.monotonic() + 120
         self.weekly_sent: Optional[date] = None
+        self.guide_at = time.monotonic() + 600  # pirmā atjaunošana 10 min pēc starta
+        self.guide_done: Optional[date] = None
 
     def _rss_gap(self) -> float:
         return random.uniform(config.RSS_INTERVAL_MIN, config.RSS_INTERVAL_MAX)
@@ -69,6 +71,15 @@ class Scheduler:
             from . import report
             telegram.send_text(report.build(self.w.store, 7))
             self.weekly_sent = t.date()
+
+        if mono >= self.guide_at or (t.hour == 7 and t.minute >= 30 and self.guide_done != t.date()):
+            from . import guide
+            try:
+                guide.refresh(self.w.store, getattr(self.w.deals, "prices", None))
+            except Exception:
+                log.exception("Cenu ceļveža atjaunošana neizdevās")
+            self.guide_at = float("inf")
+            self.guide_done = t.date()
 
         if not is_active(t):
             return

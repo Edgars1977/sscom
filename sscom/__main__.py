@@ -5,6 +5,7 @@
   python -m sscom test-filters         — parāda, kuri bāzes sludinājumi atbilst filtriem
   python -m sscom dealers [kategorija] — firmu atpazīšanas atskaite
   python -m sscom report [dienas] [--send] — kopsavilkums (ar --send arī uz Telegram)
+  python -m sscom guide                — pārrēķina cenu ceļvedi
   python -m sscom migrate <mērķa_DB_URL> — pārkopē datus no DATABASE_URL uz citu DB (piem. Railway)
 """
 from __future__ import annotations
@@ -20,6 +21,7 @@ from sqlalchemy import select
 
 from . import config, db, filters, parser
 from . import deals as deals_mod  # noqa: F401 — reģistrē ai_usage/new_prices tabulas
+from . import guide, inventory  # noqa: F401 — reģistrē price_guide/purchases tabulas
 from .http import Client
 from .scheduler import Scheduler
 from .watcher import Watcher
@@ -82,7 +84,11 @@ def main() -> None:
     w = Watcher(store, client, deals=deals_mod.DealEngine(store))
     try:
         if cmd == "run":
+            from . import web
+            web.start_in_thread(store)
             Scheduler(w).run_forever()
+        elif cmd == "guide":
+            print("grupas:", guide.refresh(store, w.deals.prices))
         elif cmd == "rss":
             for c in config.CATEGORIES:
                 print(c, "jauni:", w.check_rss(c))

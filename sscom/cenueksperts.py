@@ -99,6 +99,12 @@ class PriceLookup:
         self.client = client or Client(base_url=BASE)
         self.ai = ai  # ja ir: GPT atlasa tikai pašu preci (bez rezerves daļām)
 
+    def is_cached(self, query: str) -> bool:
+        key = re.sub(r"\s+", " ", query).strip().lower()
+        with self.store.engine.connect() as c:
+            row = c.execute(select(new_prices.c.fetched_at).where(new_prices.c.query == key)).first()
+        return bool(row and row.fetched_at > db.now() - timedelta(days=CACHE_DAYS))
+
     def get(self, query: str) -> Optional[NewPrice]:
         query = re.sub(r"\s+", " ", query).strip()
         if not query:

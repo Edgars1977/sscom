@@ -234,6 +234,37 @@ class DealEngine:
         city = (l.city or "").lower()
         return any(loc in city for loc in LOCATIONS) or bool(facts.get("delivers_to_riga"))
 
+    def _target_alert(self, l: Listing, facts: Dict[str, Any]) -> bool:
+        """🎯 Ja Edgars ceļvedī ir ierakstījis savu cenu šai grupai un sludinājums ir zem tās."""
+        from . import guide
+        key = guide.guide_key(facts)
+        if not key:
+            return False
+        with self.store.engine.begin() as c:
+            c.execute(update(db.listings).where(db.listings.c.ss_id == l.ss_id).values(guide_key=key))
+        target = guide.target_for(self.store, key)
+        if target is None or l.price > target or facts["condition"] in ("broken", "for_parts"):
+            return False
+        with self.store.engine.connect() as c:
+            g = c.execute(select(guide.price_guide).where(guide.price_guide.c.guide_key == key)).first()
+        e = html.escape
+        lines = [f"🎯 <b>{l.price:.0f} € — zem tavas cenas {target:.0f} €</b> · {e(key)}",
+                 f"<b>{e(l.title[:120])}</b>"]
+        if g:
+            lines.append(f"📊 ss.com {g.n}×, mediāna {g.price_median:.0f} €"
+                         + (f" · pārdodas ~{g.days_to_sell:.0f} d" if g.days_to_sell else "")
+                         + (f" · jauns LV {g.new_min:.0f} €" if g.new_min else ""))
+        if facts.get("defects"):
+            lines.append("⚠️ " + e(facts["defects"][:150]))
+        lines.append(f"📍 {e(l.city or '?')}")
+        lines.append(f'<a href="{e(l.url)}">Atvērt ss.com</a>')
+        if telegram.send_listing(l, "", text="\n".join(lines)):
+            with self.store.engine.begin() as c:
+                c.execute(update(db.listings).where(db.listings.c.ss_id == l.ss_id).values(
+                    notified_at=db.now(), deal_sent_at=db.now(), matched_filter="AI mana cena"))
+            return True
+        return False
+
     def handle_new(self, l: Listing) -> bool:
         """Atgriež True, ja aizsūtīja paziņojumu par darījumu.
         Vērtējumu (arī negatīvu) atstāj self.last_eval, lai filtra ziņa var to parādīt."""
@@ -247,6 +278,8 @@ class DealEngine:
         if not self.location_ok(l, facts):
             self.last_skip = "location"
             return False
+        if self._target_alert(l, facts):
+            return True
         if l.price > MAX_PRICE or l.price < 5:
             return False
         deal = self.evaluate(l, facts)
