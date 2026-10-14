@@ -68,8 +68,9 @@ def _size_bucket(gb: float) -> str:
     return f"{int(gb)}GB" if gb < 1000 else f"{gb / 1000:g}TB"
 
 
-def guide_key(facts: Dict[str, Any]) -> Optional[str]:
-    """Grupas atslēga no ai_json. None = nav jēgas ceļvedī (salikts dators, nezināms)."""
+def guide_key(facts: Dict[str, Any], text: str = "") -> Optional[str]:
+    """Grupas atslēga no ai_json (+ sludinājuma teksts rezervei).
+    None = nav jēgas ceļvedī (salikts dators, nezināms)."""
     t = facts.get("item_type")
     key = (facts.get("model_key") or "").lower()
     if not key or "unknown" in key or t in ("desktop", "bundle", "other", None):
@@ -92,20 +93,7 @@ def guide_key(facts: Dict[str, Any]) -> Optional[str]:
         return key[:60]
 
     if t == "ram":
-        ddr = re.search(r"ddr\s*([2-5])", key)
-        laptop = bool(re.search(r"so-?dimm|sodimm|laptop|portat", key))
-        total = None
-        kit = re.search(r"(\d)\s*x\s*(\d{1,2})\s*gb", key)
-        if kit:
-            total = int(kit.group(1)) * int(kit.group(2))
-        elif facts.get("ram_gb"):
-            total = int(facts["ram_gb"])
-        else:
-            m = re.search(r"(\d{1,3})\s*gb", key)
-            total = int(m.group(1)) if m else None
-        if not ddr or not total:
-            return None
-        return f"DDR{ddr.group(1)} {total}GB" + (" SO-DIMM" if laptop else "")
+        return ram_key(facts, key, text)
 
     if t == "storage":
         size = facts.get("storage_gb")
@@ -124,6 +112,61 @@ def guide_key(facts: Dict[str, Any]) -> Optional[str]:
     return key[:80]
 
 
+# RAM: "2x8gb", "8gbx2", "2 pa 8gb", "2 × 8 GB", "две планки по 8", "4gb x 4"
+_KIT_RES = [
+    re.compile(r"(\d)\s*[x×хх*]\s*(\d{1,3})\s*(?:gb|гб)"),
+    re.compile(r"(\d{1,3})\s*(?:gb|гб)\s*[x×х*]\s*(\d)\b"),
+    re.compile(r"(\d)\s*(?:pa|по)\s*(\d{1,3})\s*(?:gb|гб)"),
+]
+_WORD_COUNT = {"две": 2, "два": 2, "divi": 2, "divas": 2, "четыре": 4, "četri": 4, "četras": 4}
+
+
+def ram_key(facts: Dict[str, Any], key: str, text: str = "") -> Optional[str]:
+    """'DDR4 16GB (2×8GB)', 'DDR4 16GB (1×16GB)', 'DDR3 8GB SO-DIMM (2×4GB)', 'DDR4 32GB ECC (1×32GB)'.
+    Ja moduļi nav zināmi: 'DDR4 16GB (?)'. 2×8 un 1×16 ir dažādas preces ar dažādu cenu."""
+    low = f"{key} {text}".lower()
+    ddr = re.search(r"ddr\s*([2-5])|ddr\s*(ii|iii)", low)
+    if not ddr:
+        return None
+    gen = ddr.group(1) or {"ii": "2", "iii": "3"}[ddr.group(2)]
+
+    count, size = facts.get("ram_module_count"), facts.get("ram_module_gb")
+    if not (count and size):
+        for i, rx in enumerate(_KIT_RES):
+            m = rx.search(low)
+            if m:
+                a, b = int(m.group(1)), int(m.group(2))
+                count, size = (b, a) if i == 1 else (a, b)
+                break
+    if not (count and size):
+        m = re.search(r"(две|два|divi|divas|четыре|četri|četras)\s+(?:планк\w*|плашк\w*|plat\w*|modu\w*|stik\w*)\s*(?:по\s*)?(\d{1,3})", low)
+        if m:
+            count, size = _WORD_COUNT[m.group(1)], int(m.group(2))
+    total = facts.get("ram_gb")
+    if not (count and size) and re.search(r"одной\s+(?:планк|плашк)|vien[aā]\s+(?:plat|modu|stik)|\b1\.?\s*x\s*\d|\(x\s*1\)|\bx\s*1\b", low):
+        m = re.search(r"(\d{1,3})\s*(?:gb|гб)", low)
+        if m:
+            count, size = 1, int(m.group(1))
+    if facts.get("price_per_module") and size:
+        count = 1  # cena par vienu moduli -> vērtējam kā vienu moduli
+    if count and size:
+        total = count * size
+    if not total:
+        m = re.search(r"(\d{1,3})\s*gb", key)
+        total = int(m.group(1)) if m else None
+    if not total:
+        return None
+
+    tags = ""
+    no_ecc = re.sub(r"non[\s-]?ecc|bez\s+ecc|без\s+ecc", "", low)
+    if facts.get("ram_ecc") or re.search(r"\becc\b|rdimm|registered|\breg\b", no_ecc):
+        tags += " ECC"
+    if facts.get("ram_sodimm") or re.search(r"so-?dimm|sodimm|laptop|portat|ноутбук", low):
+        tags += " SO-DIMM"
+    modules = f"{count}×{size}GB" if count and size else "?"
+    return f"DDR{gen} {total}GB{tags} ({modules})"
+
+
 # ---------------------------------------------------------------- aprēķins
 
 def refresh(store: db.Store, prices=None, max_lookups: int = 25) -> int:
@@ -132,7 +175,7 @@ def refresh(store: db.Store, prices=None, max_lookups: int = 25) -> int:
     L = db.listings
     since = db.now() - timedelta(days=GUIDE_DAYS)
     with store.engine.connect() as c:
-        rows = c.execute(select(L.c.ss_id, L.c.ai_json, L.c.price, L.c.status, L.c.first_seen,
+        rows = c.execute(select(L.c.ss_id, L.c.ai_json, L.c.price, L.c.status, L.c.first_seen, L.c.description,
                                 L.c.last_seen, L.c.disappeared_at, L.c.url, L.c.guide_key)
                          .where(L.c.is_dealer == 0, L.c.ai_json.isnot(None), L.c.price.isnot(None),
                                 L.c.first_seen >= since)).all()
@@ -143,7 +186,7 @@ def refresh(store: db.Store, prices=None, max_lookups: int = 25) -> int:
         facts = json.loads(r.ai_json)
         if facts.get("condition") in ("broken", "for_parts"):
             continue
-        k = guide_key(facts)
+        k = guide_key(facts, r.description or "")
         if k != r.guide_key:
             key_updates.append({"_id": r.ss_id, "_k": k})
         if k:

@@ -230,6 +230,14 @@ class Watcher:
                                 L.c.price <= ANALYSE_MAX_PRICE, L.c.status != "no_price")
                 .order_by(L.c.first_seen.desc()).limit(limit)
             ).all()
+            if not rows:
+                # RAM, kas analizēta pirms moduļu laukiem (2×8 vs 1×16) — pārvērtējam
+                rows = c.execute(
+                    select(L).where(L.c.is_dealer == 0, L.c.status == "active",
+                                    L.c.ai_json.like('%"item_type": "ram"%'),
+                                    L.c.ai_json.notlike('%ram_module_count%'))
+                    .limit(limit)
+                ).all()
         done = 0
         for r in rows:
             l = db.row_to_listing(r)

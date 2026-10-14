@@ -78,7 +78,7 @@ class Scheduler:
                 guide.refresh(self.w.store, getattr(self.w.deals, "prices", None))
             except Exception:
                 log.exception("Cenu ceļveža atjaunošana neizdevās")
-            self.guide_at = float("inf")
+            self.guide_at = time.monotonic() + 6 * 3600  # atkārtoti ik pēc 6 h
             self.guide_done = t.date()
 
         if not is_active(t):

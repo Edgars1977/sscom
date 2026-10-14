@@ -60,6 +60,15 @@ EXTRACT_SCHEMA = {
         "urgency_note": {"type": ["string", "null"]},
         "delivers_to_riga": {"type": "boolean", "description":
                              "seller offers to bring/meet in Riga (not just parcel shipping)"},
+        "ram_module_count": {"type": ["integer", "null"], "description":
+                             "RAM only: number of memory sticks sold together (2 for '2x8GB', '2 pa 8Gb', 'две планки'); "
+                             "1 for 'one stick'/'viena plate'/'одной планкой'. If price is per stick, 1. If only one size is "
+                             "stated with no hint of several sticks, assume 1. Null if not RAM."},
+        "ram_module_gb": {"type": ["integer", "null"], "description": "RAM only: size of ONE stick in GB (8 for '2x8GB')"},
+        "ram_ecc": {"type": "boolean", "description": "RAM only: ECC / registered / RDIMM server memory"},
+        "ram_sodimm": {"type": "boolean", "description": "RAM only: SO-DIMM (laptop) memory"},
+        "price_per_module": {"type": "boolean", "description":
+                             "true if the stated price is per one stick/piece ('par moduli', '/gab', 'за штуку', 'cena par 1')"},
         "components": {"type": "array", "description":
                        "ONLY for desktop PCs/bundles: every sellable part that is stated. Empty list otherwise.",
                        "items": {"type": "object", "additionalProperties": False,
@@ -73,7 +82,8 @@ EXTRACT_SCHEMA = {
     },
     "required": ["item_type", "model_key", "search_query", "release_year", "cpu", "gpu", "ram_gb",
                  "storage_gb", "condition", "defects", "seller_is_business", "urgent",
-                 "urgency_note", "delivers_to_riga", "components"],
+                 "urgency_note", "delivers_to_riga", "ram_module_count", "ram_module_gb", "ram_ecc",
+                 "ram_sodimm", "price_per_module", "components"],
 }
 
 MATCH_SCHEMA = {

@@ -167,7 +167,7 @@ let gt;function loadGuide(){const p=new URLSearchParams({q:$('#q').value,type:$(
  api('/api/guide?'+p).then(d=>{$('#upd').textContent=d.updated?'Atjaunots: '+d.updated.slice(0,16).replace('T',' ')+' UTC':'';
  $('#gb').innerHTML=d.rows.map(r=>`<tr><td><b>${esc(r.guide_key)}</b><div class="mut">${esc(r.item_type||'')}</div></td>
  <td>${r.n}× · ${eur(r.price_min)}–${eur(r.price_max)}<div class="mut">aktīvi ${r.n_active}, pazuduši ${r.n_gone}</div></td>
- <td class="n">${eur(r.price_median)}</td><td class="n">${r.days_to_sell==null?'—':r.days_to_sell+' d'}</td><td class="n">${eur(r.new_min)}</td>
+ <td class="n">${eur(r.price_median)}${(m=>m&&+m[1]>1?`<div class="mut">= ${Math.round(r.price_median/m[1])} €/mod.</div>`:'')(r.guide_key.match(/\((\d+)×/))}</td><td class="n">${r.days_to_sell==null?'—':r.days_to_sell+' d'}</td><td class="n">${eur(r.new_min)}</td>
  <td class="n"><b>${eur(r.buy_max)}</b></td>
  <td class="n"><input class="t" type="number" value="${r.target_price??''}" data-k="${esc(r.guide_key)}" placeholder="—"></td>
  <td>${r.cheapest_url?`<a href="${esc(r.cheapest_url)}" target="_blank">${eur(r.cheapest_price)}</a>`+(r.target_price&&r.cheapest_price<=r.target_price?' 🎯':''):'—'}</td></tr>`).join('')||'<tr><td colspan=8 class="mut">Nav datu</td></tr>';
