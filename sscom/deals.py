@@ -130,13 +130,15 @@ class DealEngine:
 
     # ---------------------------------------------------------------- tirgus
 
-    def comparables(self, model_key: str, exclude_id: str) -> List[float]:
+    def comparables(self, model_key: str, exclude_id: str, family: Optional[str] = None) -> List[float]:
+        """Privāto līdzīgo cenas. family (portatīvajiem 'dell latitude 5520') paplašina salīdzinājumu."""
         since = db.now() - timedelta(days=COMPS_DAYS)
         L = db.listings
+        same = (L.c.model_key == model_key) | (L.c.guide_key == family) if family else (L.c.model_key == model_key)
         with self.store.engine.connect() as c:
             rows = c.execute(
                 select(L.c.price, L.c.ai_json)
-                .where(L.c.model_key == model_key, L.c.ss_id != exclude_id, L.c.is_dealer == 0,
+                .where(same, L.c.ss_id != exclude_id, L.c.is_dealer == 0,
                        L.c.price.isnot(None), L.c.first_seen >= since,
                        L.c.status.in_(["active", "disappeared"]))
             ).all()
@@ -153,13 +155,19 @@ class DealEngine:
     def evaluate(self, l: Listing, facts: Dict[str, Any]) -> Optional[Deal]:
         price = l.price
         broken = facts["condition"] in ("broken", "for_parts")
-        comps = [] if broken else self.comparables(normalize_key(facts["model_key"]), l.ss_id)
+        from . import guide
+        family = guide.laptop_family(facts["model_key"].lower()) if facts["item_type"] == "laptop" else None
+        comps = [] if broken else self.comparables(normalize_key(facts["model_key"]), l.ss_id, family)
 
         # saliktam datoram/komplektam "jaunas cenas" nav — GPT reizēm dod tikai CPU nosaukumu
         query = facts.get("search_query") if facts["item_type"] not in ("desktop", "bundle") else None
         new = self.prices.get(query) if query else None
         new_min = new.min_price if new and new.n else None
         new_median = new.median_price if new and new.n else None
+        if new_min and new_min < price * 0.4:
+            # "jauns" lētāks par 40% no lietotā = piederums (lādētājs, baterija), nevis prece
+            log.info("Jaunā cena %.0f € neticama pret %.0f € (%s) — ignorēju", new_min, price, query)
+            new_min = new_median = None
 
         verdict = None
         if len(comps) >= COMPS_MIN:
@@ -250,6 +258,8 @@ class DealEngine:
         e = html.escape
         lines = [f"🎯 <b>{l.price:.0f} € — zem tavas cenas {target:.0f} €</b> · {e(key)}",
                  f"<b>{e(l.title[:120])}</b>"]
+        if gen_line(facts):
+            lines.append(gen_line(facts))
         if g:
             lines.append(f"📊 ss.com {g.n}×, mediāna {g.price_median:.0f} €"
                          + (f" · pārdodas ~{g.days_to_sell:.0f} d" if g.days_to_sell else "")
@@ -307,6 +317,8 @@ class DealEngine:
             body = format_deal(l, facts, deal)
         else:
             lines = [f"<b>{e(l.title[:120])}</b>", e(key or facts.get("model_key") or "")]
+            if gen_line(facts):
+                lines.append(gen_line(facts))
             if hit_target:
                 lines.append(f"🎯 zem tavas cenas {target:.0f} €")
             if g is not None:
@@ -381,6 +393,8 @@ def format_partout(l: Listing, facts: Dict[str, Any], po: PartOut) -> str:
         f"🔧 <b>Pa daļām +{po.profit:.0f} € ({po.margin * 100:.0f}%)</b> · prasa {po.price:.0f} € → detaļas ~{po.total:.0f} €",
         f"<b>{e(l.title[:120])}</b>",
     ]
+    if gen_line(facts):
+        lines.append(gen_line(facts))
     for p in sorted(po.parts, key=lambda x: -x["price"]):
         src = f" · ss.com {p['comps']}×" if p["comps"] else ""
         lines.append(f"  {PART_LV.get(p['type'], p['type'])}: {e(p['key'][:45])} — ~{p['price']:.0f} €{src}")
@@ -389,6 +403,15 @@ def format_partout(l: Listing, facts: Dict[str, Any], po: PartOut) -> str:
         lines.append("🤖 " + e(po.verdict[:300]))
     lines.append(f'<a href="{e(l.url)}">Atvērt ss.com</a>')
     return "\n".join(lines)
+
+
+def gen_line(facts: Dict[str, Any]) -> Optional[str]:
+    """📅 2021 · Intel 11. paaudze (Tiger Lake) · DDR4 — orientējoša gradācija."""
+    parts = [str(facts["release_year"]) if facts.get("release_year") else None,
+             facts.get("cpu_generation"), facts.get("ram_type")]
+    parts = [re.sub(r"(\d+)\s*(?:st|nd|rd|th)\.?\s*(?:gen(?:eration)?|paaudze)", r"\1. paaudze", p, flags=re.I)
+             for p in parts if p]
+    return "📅 " + html.escape(" · ".join(parts)) if parts else None
 
 
 def format_eval_line(facts: Dict[str, Any], d: Deal, po: Optional[PartOut] = None) -> str:
@@ -401,6 +424,8 @@ def format_eval_line(facts: Dict[str, Any], d: Deal, po: Optional[PartOut] = Non
         why.append(f"peļņa {d.profit:+.0f} € ({d.margin * 100:+.0f}%)")
     line = (f"📉 <b>Nav darījums</b>: pārdot ~{d.resale:.0f} € · " + e(", ".join(why)) +
             f" · pārliecība: {CONF_LV.get(d.confidence, d.confidence)}")
+    if gen_line(facts):
+        line = gen_line(facts) + "\n" + line
     if d.verdict:
         line += "\n🤖 " + e(d.verdict[:250])
     if po is not None:
@@ -413,9 +438,7 @@ def format_deal(l: Listing, facts: Dict[str, Any], d: Deal) -> str:
     # saliktam datoram modelis = "cpu + gpu", tāpēc rādām komponentes; citām precēm — modeli
     composite = facts["item_type"] in ("desktop", "bundle") or "+" in (facts.get("model_key") or "")
     specs = [] if composite else [facts.get("model_key") or ""]
-    if facts.get("release_year"):
-        specs.append(str(facts["release_year"]))
-    keys = (("cpu", ""), ("gpu", "")) if composite else ()
+    keys = (("cpu", ""), ("gpu", "")) if composite else (("cpu", ""),)
     for key, suffix in keys + (("ram_gb", " GB RAM"), ("storage_gb", " GB")):
         v = facts.get(key)
         if v:
@@ -433,6 +456,8 @@ def format_deal(l: Listing, facts: Dict[str, Any], d: Deal) -> str:
         f"<b>{e(l.title[:120])}</b>",
         e(" · ".join(s for s in specs if s)),
     ]
+    if gen_line(facts):
+        lines.append(gen_line(facts))
     if market:
         lines.append("📊 " + e(" · ".join(market)))
     if facts.get("defects"):

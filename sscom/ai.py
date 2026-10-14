@@ -41,6 +41,8 @@ EXTRACT_SCHEMA = {
                       "'lenovo thinkpad t480', 'apple macbook air m1'. GPUs: chip + memory only, WITHOUT board "
                       "partner/series (XFX, Sapphire, ASUS TUF, Gaming OC...), e.g. 'amd radeon rx 9070 xt 16gb', "
                       "'nvidia rtx 3060 12gb'. RAM: 'ddr4 16gb 3200'. "
+                      "Laptops: brand + series + model number only, WITHOUT cpu/ram/ssd, e.g. 'dell latitude 5520', "
+                      "'lenovo thinkpad t14 gen 2', 'hp probook 450 g8'. "
                       "Self-built desktops: main 'cpu + gpu', e.g. 'ryzen 5 5600 + rtx 3060'."},
         "search_query": {"type": "string", "description":
                          "short query to find the NEW product in a price comparison site, model only, "
@@ -48,6 +50,12 @@ EXTRACT_SCHEMA = {
                          "(GPUs: chip only, no board partner). Empty for custom-built desktops."},
         "release_year": {"type": ["integer", "null"], "description": "year this model was first released, best estimate from your knowledge"},
         "cpu": {"type": ["string", "null"]},
+        "cpu_generation": {"type": ["string", "null"], "description":
+                           "short CPU generation/architecture from your knowledge, e.g. 'Intel 11. paaudze (Tiger Lake)', "
+                           "'Intel 8. paaudze (Kaby Lake R)', 'AMD Ryzen 5000 (Zen 3)', 'Apple M1'. Null if no CPU info"},
+        "ram_type": {"type": ["string", "null"], "description":
+                     "memory type of the device/stick: DDR2, DDR3, DDR3L, DDR4, DDR5, LPDDR4X, LPDDR5... "
+                     "from text or from your knowledge of the model/CPU. Null if unknown"},
         "gpu": {"type": ["string", "null"]},
         "ram_gb": {"type": ["integer", "null"]},
         "storage_gb": {"type": ["integer", "null"]},
@@ -80,7 +88,8 @@ EXTRACT_SCHEMA = {
                                              "'ddr4 32gb 3200', 'nvme 1tb', 'aio 240mm'. 'unknown' if type stated without model"}},
                                  "required": ["type", "key"]}},
     },
-    "required": ["item_type", "model_key", "search_query", "release_year", "cpu", "gpu", "ram_gb",
+    "required": ["item_type", "model_key", "search_query", "release_year", "cpu", "cpu_generation",
+                 "ram_type", "gpu", "ram_gb",
                  "storage_gb", "condition", "defects", "seller_is_business", "urgent",
                  "urgency_note", "delivers_to_riga", "ram_module_count", "ram_module_gb", "ram_ecc",
                  "ram_sodimm", "price_per_module", "components"],
@@ -173,7 +182,8 @@ class AI:
         )
         return self._call(MODEL_FAST, "extract",
                           "You analyse Latvian/Russian computer-hardware classified ads for a reseller. "
-                          "Extract the facts precisely; do not guess specs that are not stated, except release_year.",
+                          "Extract the facts precisely; do not guess specs that are not stated, EXCEPT release_year, "
+                          "cpu_generation and ram_type: fill those from your own knowledge of the model/CPU.",
                           text, EXTRACT_SCHEMA)
 
     # ---------------------------------------------------------------- 2. cenueksperts pārbaude

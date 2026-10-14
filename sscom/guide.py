@@ -108,8 +108,22 @@ def guide_key(facts: Dict[str, Any], text: str = "") -> Optional[str]:
             "SSD" if re.search(r"ssd|a400|mx500|870|860|sa400|bx500", key) else "HDD"
         return f"{kind} {_size_bucket(float(size))}"
 
-    # portatīvie, plates, barošanas bloki, korpusi, dzesētāji: GPT modelis kā ir
+    if t == "laptop":
+        return laptop_family(key)
+
+    # plates, barošanas bloki, korpusi, dzesētāji: GPT modelis kā ir
     return key[:80]
+
+
+def laptop_family(key: str) -> Optional[str]:
+    """'dell latitude 5520 + intel core i7-1165g7 + 16gb' / 'dell latitude 5520 i5-1135g7 8gb' -> 'dell latitude 5520'"""
+    k = key.split("+")[0]
+    k = re.split(r"\b(?:intel|amd|core|i[3579][\s-]?\d|ryzen|celeron|pentium|\d+\s?gb|\d+\s?tb|ssd|nvme|hdd|"
+                 r"rtx|gtx|radeon|win(?:dows)?|\d{2}[.,]?\d?\s?(?:\"|''|inch|collu))", k)[0]
+    k = re.sub(r"\bgen\s*(\d)", r"gen \1", k)                 # gen2 -> gen 2
+    k = re.sub(r"\b\d{2}[a-z0-9]{6,}\b", "", k)              # Lenovo MTM kods 20wns1q70w
+    k = re.sub(r"\s+", " ", re.sub(r"[\s,(/-]+$", "", k)).strip()
+    return k[:80] or None
 
 
 # RAM: "2x8gb", "8gbx2", "2 pa 8gb", "2 × 8 GB", "две планки по 8", "4gb x 4"
