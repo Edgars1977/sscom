@@ -192,7 +192,7 @@ def refresh(store: db.Store, prices=None, max_lookups: int = 25) -> int:
         rows = c.execute(select(L.c.ss_id, L.c.ai_json, L.c.price, L.c.status, L.c.first_seen, L.c.description,
                                 L.c.last_seen, L.c.disappeared_at, L.c.url, L.c.guide_key)
                          .where(L.c.is_dealer == 0, L.c.ai_json.isnot(None), L.c.price.isnot(None),
-                                L.c.first_seen >= since)).all()
+                                L.c.first_seen >= since, L.c.status.in_(["active", "disappeared"]))).all()
 
     groups: Dict[str, List] = {}
     key_updates = []

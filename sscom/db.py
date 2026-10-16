@@ -61,6 +61,7 @@ listings = Table(
     Column("deal_sent_at", DateTime),
     Column("guide_key", String(120), index=True),   # cenu ceļveža grupa (guide.py)
     Column("notified_price", Float),                # cena, par kuru pēdējo reizi ziņojām
+    Column("feedback", String(20)),                 # Telegram pogas: bought | skip
     Column("partout_est", Float),
     Column("partout_json", Text),
 )

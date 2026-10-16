@@ -145,8 +145,9 @@ class AI:
     def enabled(self) -> bool:
         return bool(self.api_key)
 
-    def _call(self, model: str, purpose: str, system: str, user: str,
-              schema: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _call(self, model: str, purpose: str, system: str, user: Any,
+              schema: Optional[Dict[str, Any]]) -> Optional[Any]:
+        """schema=None -> brīvs teksts. user var būt teksts vai saturs ar attēlu (vision)."""
         if not self.enabled:
             return None
         try:
@@ -154,8 +155,9 @@ class AI:
                 "model": model,
                 "reasoning_effort": "low",
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-                "response_format": {"type": "json_schema",
-                                    "json_schema": {"name": purpose, "strict": True, "schema": schema}},
+                **({"response_format": {"type": "json_schema",
+                                        "json_schema": {"name": purpose, "strict": True, "schema": schema}}}
+                   if schema else {}),
             })
             data = r.json()
         except (httpx.HTTPError, ValueError) as e:
@@ -171,7 +173,8 @@ class AI:
                 prompt_tokens=usage.get("prompt_tokens", 0),
                 completion_tokens=usage.get("completion_tokens", 0)))
         try:
-            return json.loads(data["choices"][0]["message"]["content"])
+            content = data["choices"][0]["message"]["content"]
+            return json.loads(content) if schema else content
         except (KeyError, IndexError, ValueError) as e:
             log.warning("OpenAI %s: nesaprotama atbilde: %s", purpose, e)
             return None
@@ -233,3 +236,24 @@ class AI:
                           "Be realistic, not pessimistic.",
                           json.dumps({"asking_price_for_whole_pc_eur": asking_price, "parts": components},
                                      ensure_ascii=False), PARTS_SCHEMA)
+
+    # ---------------------------------------------------------------- 5. saruna un ekrānuzņēmumi
+
+    def chat(self, system: str, user: str) -> Optional[str]:
+        return self._call(MODEL_SMART, "chat", system, user, None)
+
+    def read_screenshot(self, image: bytes, mime: str = "image/jpeg") -> Optional[Dict[str, Any]]:
+        """Sludinājuma ekrānuzņēmums (FB Marketplace u.c.) -> virsraksts, cena, vieta, teksts."""
+        import base64
+        url = f"data:{mime};base64,{base64.b64encode(image).decode()}"
+        schema = {"type": "object", "additionalProperties": False,
+                  "properties": {"is_listing": {"type": "boolean"}, "title": {"type": "string"},
+                                 "price_eur": {"type": ["number", "null"]}, "location": {"type": ["string", "null"]},
+                                 "text": {"type": "string", "description": "all visible listing text: specs, description"}},
+                  "required": ["is_listing", "title", "price_eur", "location", "text"]}
+        return self._call(MODEL_SMART, "screenshot",
+                          "Read this screenshot of a second-hand marketplace listing (computer hardware). "
+                          "Transcribe title, price in EUR, location and all visible description/spec text.",
+                          [{"type": "text", "text": "Listing screenshot:"},
+                           {"type": "image_url", "image_url": {"url": url}}], schema)
+
