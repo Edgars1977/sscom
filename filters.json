@@ -3,42 +3,118 @@
   "filters": [
     {
       "name": "Biznesa portatīvie līdz 350 €",
-      "categories": ["noutbooks"],
+      "categories": [
+        "noutbooks"
+      ],
       "price_max": 350,
       "ram_min": 8,
-      "keywords_any": ["thinkpad", "latitude", "elitebook", "probook", "zbook", "precision", "x1 carbon"],
-      "keywords_none": ["bojāts", "uz detaļām", "neieslēdzas", "сломан", "на запчасти"]
+      "keywords_any": [
+        "thinkpad",
+        "latitude",
+        "elitebook",
+        "probook",
+        "zbook",
+        "precision",
+        "x1 carbon"
+      ],
+      "keywords_none": [
+        "bojāts",
+        "uz detaļām",
+        "neieslēdzas",
+        "сломан",
+        "на запчасти"
+      ]
     },
     {
       "name": "MacBook līdz 700 €",
-      "categories": ["noutbooks"],
+      "categories": [
+        "noutbooks"
+      ],
       "price_max": 700,
-      "keywords_any": ["macbook"],
-      "keywords_none": ["icloud", "bloķēts", "на запчасти"]
+      "keywords_any": [
+        "macbook"
+      ],
+      "keywords_none": [
+        "icloud",
+        "bloķēts",
+        "на запчасти"
+      ]
     },
     {
       "name": "Spēļu portatīvie līdz 700 €",
-      "categories": ["noutbooks"],
+      "categories": [
+        "noutbooks"
+      ],
       "price_min": 250,
       "price_max": 700,
-      "keywords_any": ["rtx", "legion", "rog", "tuf", "omen", "victus", "nitro", "predator", "loq"],
-      "keywords_none": ["bojāts", "uz detaļām", "на запчасти"]
+      "keywords_any": [
+        "rtx",
+        "legion",
+        "rog",
+        "tuf",
+        "omen",
+        "victus",
+        "nitro",
+        "predator",
+        "loq"
+      ],
+      "keywords_none": [
+        "bojāts",
+        "uz detaļām",
+        "на запчасти"
+      ]
     },
     {
       "name": "Videokartes līdz 700 €",
-      "categories": ["completing-pc"],
-      "subcategories": ["video"],
+      "categories": [
+        "completing-pc"
+      ],
+      "subcategories": [
+        "video"
+      ],
       "price_min": 80,
       "price_max": 700,
-      "keywords_any": ["rtx", "rx 6", "rx 7", "rx 9"]
+      "keywords_any": [
+        "rtx",
+        "rx 6",
+        "rx 7",
+        "rx 9"
+      ]
     },
     {
       "name": "Spēļu datori līdz 700 €",
-      "categories": ["pc"],
+      "categories": [
+        "pc"
+      ],
       "price_min": 200,
       "price_max": 700,
       "ram_min": 16,
-      "keywords_any": ["rtx", "rx 6", "rx 7", "rx 9", "ryzen 5 5", "ryzen 7", "i5-12", "i5-13", "i5-14", "i7-1"]
+      "keywords_any": [
+        "rtx",
+        "rx 6",
+        "rx 7",
+        "rx 9",
+        "ryzen 5 5",
+        "ryzen 7",
+        "i5-12",
+        "i5-13",
+        "i5-14",
+        "i7-1"
+      ]
     }
-  ]
+  ],
+  "always": [
+    {
+      "name": "Mac mini 32GB+",
+      "text_any": [
+        "mac mini",
+        "macmini",
+        "mac-mini"
+      ],
+      "model_regex": "mac\\s*-?mini",
+      "ram_min": 32,
+      "include_dealers": false
+    }
+  ],
+  "_info_always": "'always' = rādīt VIENMĒR (jebkura cena un pilsēta), ar novērtējumu. Lauki: name, text_any, model_regex, ram_min, categories, include_dealers, enabled."
 }

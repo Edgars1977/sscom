@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy import select, update
 
-from . import db, telegram
+from . import db, filters, telegram
 from .ai import AI
 from .cenueksperts import PriceLookup
 from .parser import Listing
@@ -108,8 +108,9 @@ class DealEngine:
 
     # ---------------------------------------------------------------- analīze
 
-    def analyse(self, l: Listing) -> Optional[Dict[str, Any]]:
-        if l.price is None or l.price > ANALYSE_MAX_PRICE or l.is_dealer:
+    def analyse(self, l: Listing, force: bool = False) -> Optional[Dict[str, Any]]:
+        """force: analizē arī virs ANALYSE_MAX_PRICE ("vienmēr rādīt" noteikumiem)."""
+        if l.price is None or l.is_dealer or (l.price > ANALYSE_MAX_PRICE and not force):
             return None
         facts = self.ai.extract(l.category, l.subcategory, l.title, l.description or "",
                                 l.params, l.price, l.city)
@@ -342,6 +343,48 @@ class DealEngine:
             return True
         return False
 
+    def _watch_alert(self, l: Listing, facts: Dict[str, Any], w) -> bool:
+        """👀 "Vienmēr rādīt" — neatkarīgi no budžeta, vietas un peļņas, bet ar novērtējumu."""
+        e = html.escape
+        deal = None
+        try:
+            deal = self.evaluate(l, facts)
+        except Exception:
+            log.exception("Novērtējums neizdevās: %s", l.url)
+        specs = [facts.get("model_key") or "", facts.get("cpu") or ""]
+        if facts.get("ram_gb"):
+            specs.append(f"{facts['ram_gb']} GB RAM")
+        if facts.get("storage_gb"):
+            specs.append(f"{facts['storage_gb']} GB SSD")
+        specs.append(CONDITION_LV.get(facts["condition"], facts["condition"]))
+        lines = [f"👀 <b>{e(w.name)}</b> · {l.price:.0f} € · {e(l.city or '?')}",
+                 f"<b>{e(l.title[:120])}</b>", e(" · ".join(s for s in specs if s))]
+        if gen_line(facts):
+            lines.append(gen_line(facts))
+        if deal is not None:
+            market = []
+            if deal.comps:
+                market.append(f"ss.com {len(deal.comps)} līdzīgi: {min(deal.comps):.0f}–{max(deal.comps):.0f} €")
+            if deal.new_min:
+                market.append(f"jauns LV no {deal.new_min:.0f} € ({l.price / deal.new_min * 100:.0f}%)")
+            if market:
+                lines.append("📊 " + e(" · ".join(market)))
+            verdict = "💰 <b>izdevīgi</b>" if deal.is_good else "📉 nav izdevīgi"
+            lines.append(f"{verdict}: pārdot ~{deal.resale:.0f} € ({deal.profit:+.0f} €, {deal.margin * 100:+.0f}%)"
+                         f" · pārliecība: {CONF_LV.get(deal.confidence, deal.confidence)}")
+            if deal.verdict:
+                lines.append("🤖 " + e(deal.verdict[:300]))
+        if facts.get("defects"):
+            lines.append("⚠️ " + e(facts["defects"][:150]))
+        lines.append(f'<a href="{e(l.url)}">Atvērt ss.com</a>')
+        if telegram.send_listing(l, "", text="\n".join(lines)):
+            with self.store.engine.begin() as c:
+                c.execute(update(db.listings).where(db.listings.c.ss_id == l.ss_id).values(
+                    notified_at=db.now(), notified_price=l.price, matched_filter=f"vienmēr: {w.name}"))
+            log.info("Vienmēr rādīt (%s): %s", w.name, l.url)
+            return True
+        return False
+
     def handle_new(self, l: Listing) -> bool:
         """Atgriež True, ja aizsūtīja paziņojumu par darījumu.
         Vērtējumu (arī negatīvu) atstāj self.last_eval, lai filtra ziņa var to parādīt."""
@@ -349,9 +392,14 @@ class DealEngine:
         self.last_skip = None  # "location" -> arī filtra ziņu nesūtām (Edgars pērk tikai Rīgā)
         if not self.enabled or l.price is None or l.is_dealer:
             return False
-        facts = self.analyse(l)
+        watches = filters.load_watches()
+        maybe_watch = [w for w in watches if w.text_matches(l)]
+        facts = self.analyse(l, force=bool(maybe_watch))
         if facts is None or l.is_dealer:
             return False
+        for w in maybe_watch:
+            if w.matches(l, facts):
+                return self._watch_alert(l, facts, w)
         if not self.location_ok(l, facts):
             self.last_skip = "location"
             return False

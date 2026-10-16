@@ -96,3 +96,46 @@ def load(path: Path = FILTERS_FILE) -> List[Filter]:
 
 def first_match(filters: List[Filter], l: Listing) -> Optional[Filter]:
     return next((f for f in filters if f.matches(l)), None)
+
+
+# ---------------------------------------------------------------- "vienmēr rādīt"
+
+@dataclass
+class Watch:
+    """Ko rādīt VIENMĒR (neatkarīgi no budžeta, vietas, peļņas), ar novērtējumu.
+    filters.json -> "always": [{"name": ..., "text_any": [...], "model_regex": ..., "ram_min": 32}]"""
+    name: str
+    text_any: List[str] = field(default_factory=list)   # lēta pirmspārbaude tekstā (pirms AI)
+    model_regex: Optional[str] = None                  # AI modelim / virsrakstam
+    ram_min: Optional[int] = None
+    categories: List[str] = field(default_factory=list)
+    include_dealers: bool = False
+    enabled: bool = True
+
+    def text_matches(self, l: Listing) -> bool:
+        if not self.enabled or (l.is_dealer and not self.include_dealers):
+            return False
+        if self.categories and l.category not in self.categories:
+            return False
+        text = _haystack(l)
+        return not self.text_any or any(_has(text, k) for k in self.text_any)
+
+    def matches(self, l: Listing, facts: dict) -> bool:
+        if not self.text_matches(l):
+            return False
+        if self.model_regex and not re.search(self.model_regex, f"{facts.get('model_key') or ''} {l.title}", re.I):
+            return False
+        if self.ram_min is not None:
+            ram = facts.get("ram_gb") or ram_gb(l)
+            if not ram or ram < self.ram_min:
+                return False
+        return True
+
+
+def load_watches(path: Path = FILTERS_FILE) -> List[Watch]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    known = set(Watch.__dataclass_fields__)
+    return [Watch(**{k: v for k, v in w.items() if k in known}) for w in data.get("always", [])]
