@@ -48,6 +48,12 @@ EXTRACT_SCHEMA = {
                          "short query to find the NEW product in a price comparison site, model only, "
                          "e.g. 'Ryzen 5 7500F', 'Radeon RX 9070 XT', 'RTX 3060 12GB', 'MacBook Air M1' "
                          "(GPUs: chip only, no board partner). Empty for custom-built desktops."},
+        "new_alternative_query": {"type": "string", "description":
+                                  "If this exact model is NO LONGER sold new: the closest CURRENT equivalent sold new "
+                                  "in Latvian shops (successor in the same class/series), short search query, e.g. "
+                                  "'Dell Latitude 5550' for Latitude 5520, 'Mac mini M4' for Mac mini M2, "
+                                  "'RTX 5060 Ti 16GB' for RTX 3070, 'Ryzen 5 9600' for Ryzen 5 3600. If still sold new, "
+                                  "repeat search_query. Empty for custom-built desktops."},
         "release_year": {"type": ["integer", "null"], "description": "year this model was first released, best estimate from your knowledge"},
         "cpu": {"type": ["string", "null"]},
         "cpu_generation": {"type": ["string", "null"], "description":
@@ -88,7 +94,7 @@ EXTRACT_SCHEMA = {
                                              "'ddr4 32gb 3200', 'nvme 1tb', 'aio 240mm'. 'unknown' if type stated without model"}},
                                  "required": ["type", "key"]}},
     },
-    "required": ["item_type", "model_key", "search_query", "release_year", "cpu", "cpu_generation",
+    "required": ["item_type", "model_key", "search_query", "new_alternative_query", "release_year", "cpu", "cpu_generation",
                  "ram_type", "gpu", "ram_gb",
                  "storage_gb", "condition", "defects", "seller_is_business", "urgent",
                  "urgency_note", "delivers_to_riga", "ram_module_count", "ram_module_gb", "ram_ecc",

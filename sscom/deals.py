@@ -86,6 +86,10 @@ class Deal:
     new_min: Optional[float] = None
     new_median: Optional[float] = None
     verdict: Optional[str] = None
+    new_query: Optional[str] = None      # ar ko atradām jauno cenu (saitei)
+    alt_query: Optional[str] = None      # līdzvērtīgs jauns, ja šo vairs nepārdod
+    alt_name: Optional[str] = None
+    alt_min: Optional[float] = None
 
     @property
     def is_good(self) -> bool:
@@ -160,8 +164,10 @@ class DealEngine:
         family = guide.laptop_family(facts["model_key"].lower()) if facts["item_type"] == "laptop" else None
         comps = [] if broken else self.comparables(normalize_key(facts["model_key"]), l.ss_id, family)
 
-        # saliktam datoram/komplektam "jaunas cenas" nav — GPT reizēm dod tikai CPU nosaukumu
-        query = facts.get("search_query") if facts["item_type"] not in ("desktop", "bundle") else None
+        # saliktam datoram/komplektam ("cpu + gpu") jaunas cenas nav — GPT reizēm dod tikai CPU nosaukumu.
+        # Zīmolu datori (Mac mini, OptiPlex, NUC) gan ir pārdošanā kā viena prece.
+        custom = facts["item_type"] == "bundle" or (facts["item_type"] == "desktop" and "+" in (facts.get("model_key") or ""))
+        query = facts.get("search_query") if not custom else None
         new = self.prices.get(query) if query else None
         new_min = new.min_price if new and new.n else None
         new_median = new.median_price if new and new.n else None
@@ -169,6 +175,14 @@ class DealEngine:
             # "jauns" lētāks par 40% no lietotā = piederums (lādētājs, baterija), nevis prece
             log.info("Jaunā cena %.0f € neticama pret %.0f € (%s) — ignorēju", new_min, price, query)
             new_min = new_median = None
+
+        # Ja tieši šo jaunu vairs nepārdod — līdzvērtīgs mūsdienu modelis (tikai informācijai un saitei)
+        alt_query = alt_name = alt_min = None
+        alt = (facts.get("new_alternative_query") or "").strip()
+        if not custom and not new_min and alt and alt.lower() != (query or "").lower():
+            a = self.prices.get(alt)
+            if a and a.n and a.min_price and a.min_price >= price * 0.4:
+                alt_query, alt_name, alt_min = alt, (a.names[0] if a.names else alt), a.min_price
 
         verdict = None
         if len(comps) >= COMPS_MIN:
@@ -190,7 +204,8 @@ class DealEngine:
         profit = resale - price
         deal = Deal(price=price, resale=resale, profit=profit, margin=profit / price if price else 0,
                     confidence=confidence, comps=comps, new_min=new_min, new_median=new_median,
-                    verdict=verdict)
+                    verdict=verdict, new_query=query if new_min else None,
+                    alt_query=alt_query, alt_name=alt_name, alt_min=alt_min)
         with self.store.engine.begin() as c:
             c.execute(update(db.listings).where(db.listings.c.ss_id == l.ss_id).values(
                 resale_est=round(resale, 2), margin=round(deal.margin, 3), deal_conf=confidence,
@@ -369,6 +384,8 @@ class DealEngine:
                 market.append(f"jauns LV no {deal.new_min:.0f} € ({l.price / deal.new_min * 100:.0f}%)")
             if market:
                 lines.append("📊 " + e(" · ".join(market)))
+            if shop_line(deal):
+                lines.append(shop_line(deal))
             verdict = "💰 <b>izdevīgi</b>" if deal.is_good else "📉 nav izdevīgi"
             lines.append(f"{verdict}: pārdot ~{deal.resale:.0f} € ({deal.profit:+.0f} €, {deal.margin * 100:+.0f}%)"
                          f" · pārliecība: {CONF_LV.get(deal.confidence, deal.confidence)}")
@@ -457,6 +474,22 @@ def format_partout(l: Listing, facts: Dict[str, Any], po: PartOut) -> str:
     return "\n".join(lines)
 
 
+def shop_line(d: Optional["Deal"]) -> Optional[str]:
+    """🛒 Jauns veikalā (cenueksperts meklēšanas lapa — rāda visus veikalus, saite nenoveco)."""
+    from urllib.parse import quote
+    from .cenueksperts import BASE
+    if d is None:
+        return None
+    if d.new_min and d.new_query:
+        url = f"{BASE}/mekleet/{quote(d.new_query)}.html"
+        return f'🛒 Jauns veikalā no {d.new_min:.0f} € → <a href="{html.escape(url)}">cenueksperts</a>'
+    if d.alt_min and d.alt_query:
+        url = f"{BASE}/mekleet/{quote(d.alt_query)}.html"
+        return (f"🛒 Jauns vairs nav · līdzīgs jauns: {html.escape(d.alt_query)} no {d.alt_min:.0f} € → "
+                f'<a href="{html.escape(url)}">cenueksperts</a>')
+    return None
+
+
 def gen_line(facts: Dict[str, Any]) -> Optional[str]:
     """📅 2021 · Intel 11. paaudze (Tiger Lake) · DDR4 — orientējoša gradācija."""
     parts = [str(facts["release_year"]) if facts.get("release_year") else None,
@@ -478,6 +511,8 @@ def format_eval_line(facts: Dict[str, Any], d: Deal, po: Optional[PartOut] = Non
             f" · pārliecība: {CONF_LV.get(d.confidence, d.confidence)}")
     if gen_line(facts):
         line = gen_line(facts) + "\n" + line
+    if shop_line(d):
+        line += "\n" + shop_line(d)
     if d.verdict:
         line += "\n🤖 " + e(d.verdict[:250])
     if po is not None:
@@ -512,6 +547,8 @@ def format_deal(l: Listing, facts: Dict[str, Any], d: Deal) -> str:
         lines.append(gen_line(facts))
     if market:
         lines.append("📊 " + e(" · ".join(market)))
+    if shop_line(d):
+        lines.append(shop_line(d))
     if facts.get("defects"):
         lines.append("⚠️ " + e(facts["defects"][:150]))
     if facts.get("urgent"):
