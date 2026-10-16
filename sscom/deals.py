@@ -199,6 +199,10 @@ class DealEngine:
     # ---------------------------------------------------------------- izjaukšana
 
     def evaluate_partout(self, l: Listing, facts: Dict[str, Any]) -> Optional[PartOut]:
+        # Pielodēti (Apple, monobloki, mini PC) — pa daļām nepārdod
+        if re.search(r"\b(apple|mac\s?mini|imac|mac\s?studio|all[\s-]?in[\s-]?one|aio|proone|nuc|"
+                     r"tiny|micro|mini\s?pc|monoblok)", (facts.get("model_key") or "") + " " + (l.title or ""), re.I):
+            return None
         comps_in = []
         for c in facts.get("components") or []:
             key = normalize_key(c["key"])
