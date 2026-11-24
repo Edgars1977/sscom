@@ -186,6 +186,7 @@ def ram_key(facts: Dict[str, Any], key: str, text: str = "") -> Optional[str]:
 def refresh(store: db.Store, prices=None, max_lookups: int = 25) -> int:
     """Pārrēķina visu ceļvedi. prices: cenueksperts.PriceLookup (jaunām cenām) vai None.
     max_lookups: cik jaunus cenueksperts meklējumus drīkst šoreiz (pārējie — nākamajās reizēs)."""
+    seed_targets(store)
     L = db.listings
     since = db.now() - timedelta(days=GUIDE_DAYS)
     with store.engine.connect() as c:
@@ -274,3 +275,23 @@ def set_target(store: db.Store, key: str, price: Optional[float], note: Optional
         if price is not None or note:
             c.execute(price_targets.insert().values(guide_key=key, target_price=price, note=note,
                                                     updated_at=db.now()))
+
+
+def seed_targets(store: db.Store) -> int:
+    """filters.json -> "targets": [{"guide_key": "NVMe 512GB", "max_price": 45}, ...]
+    Ieliek tikai tās mērķa cenas, kuru vēl nav (web lapā mainītās nepārraksta)."""
+    from .filters import FILTERS_FILE
+    try:
+        wanted = json.loads(FILTERS_FILE.read_text(encoding="utf-8")).get("targets", [])
+    except (OSError, ValueError):
+        return 0
+    added = 0
+    for t in wanted:
+        key, price = t.get("guide_key"), t.get("max_price")
+        if key and price is not None and target_for(store, key) is None:
+            set_target(store, key, float(price), t.get("note"))
+            added += 1
+    if added:
+        log.info("Mērķa cenas no filters.json: %d", added)
+    return added
+

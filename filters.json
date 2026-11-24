@@ -116,5 +116,18 @@
       "include_dealers": false
     }
   ],
-  "_info_always": "'always' = rādīt VIENMĒR (jebkura cena un pilsēta), ar novērtējumu. Lauki: name, text_any, model_regex, ram_min, categories, include_dealers, enabled."
+  "_info_always": "'always' = rādīt VIENMĒR (jebkura cena un pilsēta), ar novērtējumu. Lauki: name, text_any, model_regex, ram_min, categories, include_dealers, enabled.",
+  "targets": [
+    {
+      "guide_key": "NVMe 512GB",
+      "max_price": 45,
+      "note": "GF75 jaunināšanai (2026-11-24)"
+    },
+    {
+      "guide_key": "NVMe 256GB",
+      "max_price": 25,
+      "note": "GF75 jaunināšanai — lētākais variants"
+    }
+  ],
+  "_info_targets": "'targets' = 🎯 mana cena cenu ceļvedim (guide_key kā web lapā). Ieliek tikai, ja vēl nav — web lapā mainīto nepārraksta."
 }
