@@ -227,7 +227,8 @@ def refresh(store: db.Store, prices=None, max_lookups: int = 25) -> int:
         cheapest = min(active, key=lambda r: r.price) if active else None
 
         new_min = None
-        if prices is not None and len(items) >= NEW_PRICE_MIN_LISTINGS and items[0][1] not in ("laptop",):
+        # Diskiem "NVMe 512GB" ir pārāk vispārīgs — cenueksperts atrod korpusus/adapterus, ne diskus
+        if prices is not None and len(items) >= NEW_PRICE_MIN_LISTINGS and items[0][1] not in ("laptop", "storage"):
             try:
                 cached = prices.is_cached(k)
                 if not cached:

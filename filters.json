@@ -127,6 +127,16 @@
       "guide_key": "NVMe 256GB",
       "max_price": 25,
       "note": "GF75 jaunināšanai — lētākais variants"
+    },
+    {
+      "guide_key": "SSD 512GB",
+      "max_price": 35,
+      "note": "SATA 480–512 GB; tirgus med. ~55 €, pārdodas lēni (2026-11-24)"
+    },
+    {
+      "guide_key": "SSD 1TB",
+      "max_price": 65,
+      "note": "SATA 960 GB–1 TB; tirgus med. ~100 €, pārdodas lēni (2026-11-24)"
     }
   ],
   "_info_targets": "'targets' = 🎯 mana cena cenu ceļvedim (guide_key kā web lapā). Ieliek tikai, ja vēl nav — web lapā mainīto nepārraksta."
