@@ -42,6 +42,11 @@ COMPS_MIN = 3
 COMPS_DAYS = 120
 # ja lietota prece maksā >= 85% no jaunas lētākās cenas, peļņas praktiski nevar būt — GPT nesaucam
 NEW_PRICE_CEILING = 0.85
+# Portatīvie: ja precīzā modeļa salīdzinājumu nav — tās pašas klases (CPU paaudze + GPU + RAM) cenas
+CLASS_MIN = {"fine": 5, "mid": 4, "broad": 4}
+CLASS_PERCENTILE = 0.4      # klase ir plašāka par modeli — vērtējam piesardzīgāk par mediānu
+BATTERY_COST = float(os.getenv("DEAL_BATTERY_COST", "25"))  # neoriģināla baterija LV ~22–30 €
+BATTERY_RE = re.compile(r"baterij|akumulator|battery|аккумулятор|батаре", re.I)
 
 CONDITION_LV = {"new": "jauns", "like_new": "kā jauns", "used": "lietots",
                 "broken": "bojāts", "for_parts": "uz detaļām"}
@@ -90,6 +95,8 @@ class Deal:
     alt_query: Optional[str] = None      # līdzvērtīgs jauns, ja šo vairs nepārdod
     alt_name: Optional[str] = None
     alt_min: Optional[float] = None
+    comps_label: Optional[str] = None    # "intel 6.paaudze H · dGPU vāja" — ja salīdzināts ar klasi
+    battery_deducted: bool = False
 
     @property
     def is_good(self) -> bool:
@@ -157,12 +164,58 @@ class DealEngine:
             prices = [p for p in prices if med * 0.3 <= p <= med * 3]
         return sorted(prices)
 
+    def class_comparables(self, facts: Dict[str, Any], exclude_id: str) -> Optional[tuple]:
+        """Portatīvajiem: tās pašas klases privātie sludinājumi -> (cenas, klase, tālākpārdošanas cena).
+        Precīzā klase -> plašākā (CPU + GPU jauda) -> ±1 paaudze. None, ja nekur nav pietiekami."""
+        from . import guide
+        cls = guide.laptop_class(facts)
+        if not cls:
+            return None
+        since = db.now() - timedelta(days=COMPS_DAYS)
+        L = db.listings
+        with self.store.engine.connect() as c:
+            rows = c.execute(
+                select(L.c.price, L.c.status, L.c.ai_json)
+                .where(L.c.item_type == "laptop", L.c.ss_id != exclude_id, L.c.is_dealer == 0,
+                       L.c.price.isnot(None), L.c.ai_json.isnot(None), L.c.first_seen >= since,
+                       L.c.status.in_(["active", "disappeared"]))
+            ).all()
+        levels = {"fine": [], "mid": [], "broad": []}
+        for price, status, ai_json in rows:
+            f = json.loads(ai_json)
+            if f.get("condition") in ("broken", "for_parts"):
+                continue
+            other = guide.laptop_class(f)
+            if not other:
+                continue
+            if other["fine"] == cls["fine"]:
+                levels["fine"].append(price)
+            if other["mid"] == cls["mid"]:
+                levels["mid"].append(price)
+            if guide.same_broad_class(other["spec"], cls["spec"]):
+                levels["broad"].append(price)
+        labels = {"fine": cls["fine"], "mid": cls["mid"], "broad": guide.broad_label(cls["spec"])}
+        for level in ("fine", "mid", "broad"):
+            prices = levels[level]
+            if len(prices) < CLASS_MIN[level]:
+                continue
+            med = statistics.median(prices)
+            prices = sorted(p for p in prices if med * 0.3 <= p <= med * 3)
+            resale = prices[int(CLASS_PERCENTILE * (len(prices) - 1))]
+            return prices, labels[level], resale
+        return None
+
     def evaluate(self, l: Listing, facts: Dict[str, Any]) -> Optional[Deal]:
         price = l.price
         broken = facts["condition"] in ("broken", "for_parts")
         from . import guide
         family = guide.laptop_family(facts["model_key"].lower()) if facts["item_type"] == "laptop" else None
         comps = [] if broken else self.comparables(normalize_key(facts["model_key"]), l.ss_id, family)
+        comps_label = class_resale = None
+        if facts["item_type"] == "laptop" and not broken and len(comps) < COMPS_MIN:
+            cc = self.class_comparables(facts, l.ss_id)
+            if cc:
+                comps, comps_label, class_resale = cc
 
         # saliktam datoram/komplektam ("cpu + gpu") jaunas cenas nav — GPT reizēm dod tikai CPU nosaukumu.
         # Zīmolu datori (Mac mini, OptiPlex, NUC) gan ir pārdošanā kā viena prece.
@@ -185,11 +238,16 @@ class DealEngine:
                 alt_query, alt_name, alt_min = alt, (a.names[0] if a.names else alt), a.min_price
 
         verdict = None
+        battery = False
         if len(comps) >= COMPS_MIN:
-            resale = statistics.median(comps)
+            resale = class_resale if class_resale is not None else statistics.median(comps)
+            # salīdzinājumi ir strādājoši; beigtu bateriju nomainīsim (~25 €), nevis norakstīsim pusi cenas
+            if facts["item_type"] == "laptop" and BATTERY_RE.search(facts.get("defects") or ""):
+                resale -= BATTERY_COST
+                battery = True
             if facts["condition"] == "new" and new_min:
                 resale = min(resale, new_min * 0.95)
-            confidence = "high" if len(comps) >= 8 else "medium"
+            confidence = "high" if len(comps) >= 8 and not comps_label else "medium"
         else:
             if new_min and not broken and price >= new_min * NEW_PRICE_CEILING:
                 resale, confidence = min(price, new_min * NEW_PRICE_CEILING), "medium"
@@ -205,7 +263,8 @@ class DealEngine:
         deal = Deal(price=price, resale=resale, profit=profit, margin=profit / price if price else 0,
                     confidence=confidence, comps=comps, new_min=new_min, new_median=new_median,
                     verdict=verdict, new_query=query if new_min else None,
-                    alt_query=alt_query, alt_name=alt_name, alt_min=alt_min)
+                    alt_query=alt_query, alt_name=alt_name, alt_min=alt_min,
+                    comps_label=comps_label, battery_deducted=battery)
         with self.store.engine.begin() as c:
             c.execute(update(db.listings).where(db.listings.c.ss_id == l.ss_id).values(
                 resale_est=round(resale, 2), margin=round(deal.margin, 3), deal_conf=confidence,
@@ -379,7 +438,7 @@ class DealEngine:
         if deal is not None:
             market = []
             if deal.comps:
-                market.append(f"ss.com {len(deal.comps)} līdzīgi: {min(deal.comps):.0f}–{max(deal.comps):.0f} €")
+                market.append(comps_text(deal))
             if deal.new_min:
                 market.append(f"jauns LV no {deal.new_min:.0f} € ({l.price / deal.new_min * 100:.0f}%)")
             if market:
@@ -474,6 +533,16 @@ def format_partout(l: Listing, facts: Dict[str, Any], po: PartOut) -> str:
     return "\n".join(lines)
 
 
+def comps_text(d: "Deal") -> str:
+    t = f"ss.com {len(d.comps)} līdzīgi"
+    if d.comps_label:
+        t += f" (klase: {d.comps_label})"
+    t += f": {min(d.comps):.0f}–{max(d.comps):.0f} €"
+    if d.battery_deducted:
+        t += f" · −{BATTERY_COST:.0f} € baterijai"
+    return t
+
+
 def shop_line(d: Optional["Deal"]) -> Optional[str]:
     """🛒 Jauns veikalā (cenueksperts meklēšanas lapa — rāda visus veikalus, saite nenoveco)."""
     from urllib.parse import quote
@@ -534,7 +603,7 @@ def format_deal(l: Listing, facts: Dict[str, Any], d: Deal) -> str:
 
     market = []
     if d.comps:
-        market.append(f"ss.com {len(d.comps)} līdzīgi: {min(d.comps):.0f}–{max(d.comps):.0f} €")
+        market.append(comps_text(d))
     if d.new_min:
         market.append(f"jauns LV no {d.new_min:.0f} €")
 

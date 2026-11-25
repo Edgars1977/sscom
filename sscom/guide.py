@@ -126,6 +126,89 @@ def laptop_family(key: str) -> Optional[str]:
     return k[:80] or None
 
 
+# ---------------------------------------------------------------- portatīvo klase
+# Ja precīzā modeļa salīdzinājumu nav, salīdzinām ar līdzvērtīgiem portatīvajiem:
+# CPU paaudze + tips (H jaudīgais / U ekonomiskais) + videokarte + RAM.
+# Paaudze nosaka arī RAM tipu (DDR3/4/5) un mātesplates laikmetu, tāpēc atsevišķi to neliekam.
+
+_GPU_HIGH = re.compile(r"\b(gtx\s*10[78]0|rtx\s*(20[6-8]0|30[6-8]0|40[5-9]0|50[5-9]0)|rx\s*[5-7]\d00m?)\b")
+_GPU_MID = re.compile(r"\b(gtx\s*1050\s*ti|gtx\s*1060|gtx\s*16[56]0|rtx\s*(2050|3050)|"
+                      r"rx\s*(560|570|580|5[35]00m)|quadro\s*(t|p)\s*(1000|2000))\b")
+_DGPU = re.compile(r"\b(gtx|rtx|mx\s*\d{3}|quadro|radeon\s*(r[579]|rx|pro|\d{3})|rx\s*\d{3,4}|geforce\s*\d{3}m|"
+                   r"9[2-8]0m|8[2-6]0m|arc\s*a\d{3})")
+
+
+def _cpu_class(cpu: str) -> Optional[tuple]:
+    """-> (ražotājs, paaudze, tips H/U, i3/r3?) vai ("low-end", 0, "", False) vai None"""
+    c = cpu.lower()
+    if re.search(r"\b(apple|m[1-5]\b)", c):
+        return None  # MacBook — tiem pietiek modeļa salīdzinājumu
+    if re.search(r"celeron|pentium|atom|athlon|\ba[4-9]-\d|e[12]-\d{3,4}|\bn\d{3,4}\b", c):
+        return ("low-end", 0, "", False)
+    m = re.search(r"(?:ultra|core)\s*([3579])\s*(\d)\d{2}([a-z]*)", c)
+    if m:  # Core Ultra 7 155H (s1 ≈ 14. paaudze), Core 5 120U
+        return ("intel", 13 + int(m.group(2)), "H" if "h" in m.group(3) else "U", False)
+    m = re.search(r"\bi([3579])\s*-?\s*(\d{3,5})([a-z]{0,2}\d?)", c)
+    if m:
+        d = m.group(2)
+        # i5-430M (1.), i7-6700HQ (6.), i5-1135G7 (11.), i7-10750H (10.)
+        gen = 1 if len(d) == 3 else int(d[:2]) if len(d) == 5 or d[0] == "1" else int(d[0])
+        return ("intel", gen, "H" if re.match(r"h", m.group(3)) else "U", m.group(1) == "3")
+    m = re.search(r"ryzen\s*([3579])\s*(?:pro\s*)?(\d)\d{3}([a-z]*)", c)
+    if m:
+        return ("ryzen", int(m.group(2)), "H" if re.match(r"h", m.group(3)) else "U", m.group(1) == "3")
+    return None
+
+
+def gpu_tier(gpu: str) -> str:
+    g = gpu.lower()
+    if _GPU_HIGH.search(g):
+        return "dGPU augsta"
+    if _GPU_MID.search(g):
+        return "dGPU vidēja"
+    if _DGPU.search(g) and not re.search(r"\b(vega|radeon graphics|uhd|iris|hd graphics)\b", g.split("+")[0]):
+        return "dGPU vāja"
+    return "iGPU"
+
+
+def laptop_class(facts: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Portatīvā klase trijos līmeņos:
+    fine  'intel 6.paaudze H · gtx 960m · 16GB'
+    mid   'intel 6.paaudze H · dGPU vāja'
+    spec  ("intel", 6, "H", False, "dGPU vāja") — plašākajam: ±1 paaudze"""
+    cpu = _cpu_class(" ".join(str(facts.get(k) or "") for k in ("cpu", "cpu_generation", "model_key")))
+    if not cpu:
+        return None
+    vendor, gen, seg, small = cpu
+    if vendor == "low-end":
+        name = "low-end cpu"
+    else:
+        name = f"{vendor} {gen}.paaudze {seg}" if vendor == "intel" else f"ryzen {gen}000 {seg}"
+        name += (" i3" if vendor == "intel" else " r3") if small else ""
+    gpu_raw = (facts.get("gpu") or "").lower()
+    tier = gpu_tier(gpu_raw)
+    m = GPU_RE.search(gpu_raw) or re.search(r"\b(mx)\s*(\d{3})\b", gpu_raw)
+    gpu = tier
+    if m and tier != "iGPU":
+        gpu = f"{m.group(1)} {m.group(2)}" + (f" {m.group(3)}" if m.lastindex >= 3 and m.group(3) else "")
+    ram = facts.get("ram_gb") or 0
+    ram_b = "≤8GB" if ram <= 8 else "16GB" if ram <= 16 else "32GB+"
+    return {"fine": f"{name} · {gpu} · {ram_b}", "mid": f"{name} · {tier}",
+            "spec": (vendor, gen, seg, small, tier)}
+
+
+def same_broad_class(a: tuple, b: tuple) -> bool:
+    """Tas pats ražotājs, tips, videokartes jauda; paaudze ±1."""
+    return (a[0] == b[0] != "low-end" and a[2] == b[2] and a[3] == b[3] and a[4] == b[4]
+            and abs(a[1] - b[1]) <= 1)
+
+
+def broad_label(spec: tuple) -> str:
+    vendor, gen, seg, small, tier = spec
+    gens = f"{gen - 1}.–{gen + 1}." if vendor == "intel" else f"{gen - 1}000–{gen + 1}000"
+    return f"{vendor} {gens} paaudze {seg} · {tier}"
+
+
 # RAM: "2x8gb", "8gbx2", "2 pa 8gb", "2 × 8 GB", "две планки по 8", "4gb x 4"
 _KIT_RES = [
     re.compile(r"(\d)\s*[x×хх*]\s*(\d{1,3})\s*(?:gb|гб)"),
