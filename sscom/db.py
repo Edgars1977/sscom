@@ -64,6 +64,8 @@ listings = Table(
     Column("feedback", String(20)),                 # Telegram pogas: bought | skip
     Column("partout_est", Float),
     Column("partout_json", Text),
+    Column("gpt_est", Float),                       # portatīvo hibrīds: GPT un ML atsevišķi (izvērtēšanai)
+    Column("ml_est", Float),
 )
 
 price_history = Table(

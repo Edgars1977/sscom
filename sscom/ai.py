@@ -209,7 +209,7 @@ class AI:
     # ---------------------------------------------------------------- 3. tālākpārdošanas cena
 
     def estimate_resale(self, facts: Dict[str, Any], price: float, new_price: Optional[Tuple[float, float]],
-                        comps: List[float]) -> Optional[Dict[str, Any]]:
+                        comps: List[float], comps_note: Optional[str] = None) -> Optional[Dict[str, Any]]:
         ctx = {
             "item": {k: facts.get(k) for k in ("item_type", "model_key", "release_year", "cpu", "gpu",
                                                 "ram_gb", "storage_gb", "condition", "defects")},
@@ -217,10 +217,16 @@ class AI:
             "new_price_latvia_eur": {"min": new_price[0], "median": new_price[1]} if new_price else None,
             "similar_private_ads_on_ss_com_eur": comps,
         }
+        if comps_note:
+            ctx["similar_ads_note"] = comps_note + " — asking prices; use as a range, adjust for this item's specifics"
+        laptop_hint = (" For laptops: a dead battery (~25 EUR) or missing/HDD-only storage (SSD ~22 EUR) are cheap "
+                       "fixes for the buyer — value the laptop as working minus that cost, do not halve it."
+                       if facts.get("item_type") == "laptop" else "")
         return self._call(MODEL_SMART, "estimate",
                           "You are a used computer hardware reseller in Riga, Latvia (2026). Estimate the realistic "
                           "price a private seller gets on ss.com for this item. Used items sell well below new price; "
-                          "old generations lose value fast. Be conservative.",
+                          "old generations lose value fast. " + ("Be realistic, not pessimistic." + laptop_hint
+                                                                  if laptop_hint else "Be conservative."),
                           json.dumps(ctx, ensure_ascii=False), ESTIMATE_SCHEMA)
 
     # ---------------------------------------------------------------- 4. izjaukšanas vērtība

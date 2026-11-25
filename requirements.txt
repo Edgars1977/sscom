@@ -6,3 +6,5 @@ psycopg[binary]>=3.1
 tzdata
 flask>=3.0
 waitress>=3.0
+numpy>=1.26
+scikit-learn>=1.5

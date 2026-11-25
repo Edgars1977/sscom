@@ -42,7 +42,10 @@ COMPS_MIN = 3
 COMPS_DAYS = 120
 # ja lietota prece maksā >= 85% no jaunas lētākās cenas, peļņas praktiski nevar būt — GPT nesaucam
 NEW_PRICE_CEILING = 0.85
-# Portatīvie: ja precīzā modeļa salīdzinājumu nav — tās pašas klases (CPU paaudze + GPU + RAM) cenas
+# Portatīvie bez precīzā modeļa salīdzinājumiem: hibrīds GPT + ML (laptop_ml.py), vidējais.
+# Izpēte: ar ≥30% slieksni hibrīda karogi pazūd ≤3 d 39% (GPT vien 36%, vidēji 24%).
+HYBRID_MIN_MARGIN = float(os.getenv("DEAL_HYBRID_MIN_MARGIN", "0.30"))
+# Klases salīdzinājumi tiek GPT kā konteksts (paši par sevi kā cena bija slikti — 17%)
 CLASS_MIN = {"fine": 5, "mid": 4, "broad": 4}
 CLASS_PERCENTILE = 0.4      # klase ir plašāka par modeli — vērtējam piesardzīgāk par mediānu
 BATTERY_COST = float(os.getenv("DEAL_BATTERY_COST", "25"))  # neoriģināla baterija LV ~22–30 €
@@ -97,12 +100,24 @@ class Deal:
     alt_min: Optional[float] = None
     comps_label: Optional[str] = None    # "intel 6.paaudze H · dGPU vāja" — ja salīdzināts ar klasi
     battery_deducted: bool = False
+    gpt_est: Optional[float] = None      # hibrīdam: abi viedokļi atsevišķi
+    ml_est: Optional[float] = None
+    repairs: List[Any] = field(default_factory=list)   # [("baterija", 25.0), ...]
+    min_margin: float = MIN_MARGIN
 
     @property
     def is_good(self) -> bool:
         if self.new_min and self.price > self.new_min * MAX_NEW_RATIO:
             return False
-        return self.margin >= MIN_MARGIN and self.profit >= MIN_PROFIT
+        if self.ml_est is not None and self.gpt_est is None:
+            return False  # ML viens pats nav uzticams (izpēte: 16% pret vidējo 24%)
+        return self.margin >= self.min_margin and self.profit >= MIN_PROFIT
+
+    @property
+    def hot(self) -> bool:
+        """🔥 abi (GPT un ML) katrs atsevišķi saka ≥20% un ≥15 €"""
+        return all(v is not None and v - self.price >= max(MIN_PROFIT, self.price * MIN_MARGIN)
+                   for v in (self.gpt_est, self.ml_est))
 
 
 class DealEngine:
@@ -112,6 +127,8 @@ class DealEngine:
         self.prices = prices or PriceLookup(store, ai=self.ai)
         self.last_eval = None
         self.last_skip = None
+        from .laptop_ml import LaptopModel
+        self.ml = LaptopModel(store)
 
     @property
     def enabled(self) -> bool:
@@ -211,11 +228,13 @@ class DealEngine:
         from . import guide
         family = guide.laptop_family(facts["model_key"].lower()) if facts["item_type"] == "laptop" else None
         comps = [] if broken else self.comparables(normalize_key(facts["model_key"]), l.ss_id, family)
-        comps_label = class_resale = None
-        if facts["item_type"] == "laptop" and not broken and len(comps) < COMPS_MIN:
+        laptop = facts["item_type"] == "laptop"
+        comps_label = None
+        class_comps: List[float] = []
+        if laptop and not broken and len(comps) < COMPS_MIN:
             cc = self.class_comparables(facts, l.ss_id)
             if cc:
-                comps, comps_label, class_resale = cc
+                class_comps, comps_label, _ = cc
 
         # saliktam datoram/komplektam ("cpu + gpu") jaunas cenas nav — GPT reizēm dod tikai CPU nosaukumu.
         # Zīmolu datori (Mac mini, OptiPlex, NUC) gan ir pārdošanā kā viena prece.
@@ -239,36 +258,57 @@ class DealEngine:
 
         verdict = None
         battery = False
+        deal_extra: Dict[str, Any] = {}
         if len(comps) >= COMPS_MIN:
-            resale = class_resale if class_resale is not None else statistics.median(comps)
+            resale = statistics.median(comps)
             # salīdzinājumi ir strādājoši; beigtu bateriju nomainīsim (~25 €), nevis norakstīsim pusi cenas
             if facts["item_type"] == "laptop" and BATTERY_RE.search(facts.get("defects") or ""):
                 resale -= BATTERY_COST
                 battery = True
             if facts["condition"] == "new" and new_min:
                 resale = min(resale, new_min * 0.95)
-            confidence = "high" if len(comps) >= 8 and not comps_label else "medium"
+            confidence = "high" if len(comps) >= 8 else "medium"
         else:
             if new_min and not broken and price >= new_min * NEW_PRICE_CEILING:
                 resale, confidence = min(price, new_min * NEW_PRICE_CEILING), "medium"
             else:
-                est = self.ai.estimate_resale(facts, price, (new_min, new_median) if new_min else None, comps)
-                if not est or not est.get("resale_price_eur"):
+                est = self.ai.estimate_resale(facts, price, (new_min, new_median) if new_min else None,
+                                              comps or class_comps,
+                                              comps_note=f"same laptop class ({comps_label}), not exact model"
+                                              if class_comps and not comps else None)
+                gpt = float(est["resale_price_eur"]) if est and est.get("resale_price_eur") else None
+                ml = None
+                if laptop and not broken:
+                    try:
+                        ml = self.ml.value(facts, l.title, l.description, l.params)
+                    except Exception:
+                        log.exception("Portatīvo ML neizdevās: %s", l.url)
+                if gpt is None and ml is None:
                     return None
-                resale = float(est["resale_price_eur"])
-                confidence = "low" if est["confidence"] == "low" else "medium"
-                verdict = est.get("verdict_lv")
+                verdict = est.get("verdict_lv") if est else None
+                if ml is not None:
+                    ml_val, repairs, _ = ml
+                    resale = (gpt + ml_val) / 2 if gpt is not None else ml_val
+                    confidence = "medium" if gpt is not None else "low"
+                    if est and est["confidence"] == "low" and gpt is not None:
+                        confidence = "low"
+                    deal_extra = dict(gpt_est=gpt, ml_est=ml_val, repairs=repairs, min_margin=HYBRID_MIN_MARGIN)
+                else:
+                    resale = gpt
+                    confidence = "low" if est["confidence"] == "low" else "medium"
 
         profit = resale - price
         deal = Deal(price=price, resale=resale, profit=profit, margin=profit / price if price else 0,
                     confidence=confidence, comps=comps, new_min=new_min, new_median=new_median,
                     verdict=verdict, new_query=query if new_min else None,
                     alt_query=alt_query, alt_name=alt_name, alt_min=alt_min,
-                    comps_label=comps_label, battery_deducted=battery)
+                    battery_deducted=battery, **deal_extra)
+        if class_comps and not comps:
+            deal.comps, deal.comps_label = class_comps, comps_label
         with self.store.engine.begin() as c:
             c.execute(update(db.listings).where(db.listings.c.ss_id == l.ss_id).values(
                 resale_est=round(resale, 2), margin=round(deal.margin, 3), deal_conf=confidence,
-                deal_note=verdict))
+                deal_note=verdict, gpt_est=deal.gpt_est, ml_est=round(deal.ml_est, 2) if deal.ml_est else None))
         return deal
 
     # ---------------------------------------------------------------- izjaukšana
@@ -443,6 +483,7 @@ class DealEngine:
                 market.append(f"jauns LV no {deal.new_min:.0f} € ({l.price / deal.new_min * 100:.0f}%)")
             if market:
                 lines.append("📊 " + e(" · ".join(market)))
+            lines.extend(hybrid_lines(deal))
             if shop_line(deal):
                 lines.append(shop_line(deal))
             verdict = "💰 <b>izdevīgi</b>" if deal.is_good else "📉 nav izdevīgi"
@@ -533,6 +574,17 @@ def format_partout(l: Listing, facts: Dict[str, Any], po: PartOut) -> str:
     return "\n".join(lines)
 
 
+def hybrid_lines(d: Optional["Deal"]) -> List[str]:
+    """🧮 GPT ~150 € · ML ~170 €  /  🔧 iekļauts remonts: baterija 25 € + SSD 22 €"""
+    if d is None or d.ml_est is None:
+        return []
+    parts = [f"GPT ~{d.gpt_est:.0f} €" if d.gpt_est is not None else "GPT —", f"ML ~{d.ml_est:.0f} €"]
+    out = ["🧮 " + " · ".join(parts) + (" · 🔥 abi piekrīt" if d.hot else "")]
+    if d.repairs:
+        out.append("🔧 ML pēc remonta, atskaitīts: " + " + ".join(f"{n} {c:.0f} €" for n, c in d.repairs))
+    return out
+
+
 def comps_text(d: "Deal") -> str:
     t = f"ss.com {len(d.comps)} līdzīgi"
     if d.comps_label:
@@ -574,12 +626,14 @@ def format_eval_line(facts: Dict[str, Any], d: Deal, po: Optional[PartOut] = Non
     why = []
     if d.new_min and d.price > d.new_min * MAX_NEW_RATIO:
         why.append(f"{d.price / d.new_min * 100:.0f}% no jaunas cenas ({d.new_min:.0f} €)")
-    if d.margin < MIN_MARGIN or d.profit < MIN_PROFIT:
+    if d.margin < d.min_margin or d.profit < MIN_PROFIT:
         why.append(f"peļņa {d.profit:+.0f} € ({d.margin * 100:+.0f}%)")
     line = (f"📉 <b>Nav darījums</b>: pārdot ~{d.resale:.0f} € · " + e(", ".join(why)) +
             f" · pārliecība: {CONF_LV.get(d.confidence, d.confidence)}")
     if gen_line(facts):
         line = gen_line(facts) + "\n" + line
+    for h in hybrid_lines(d):
+        line += "\n" + h
     if shop_line(d):
         line += "\n" + shop_line(d)
     if d.verdict:
@@ -608,7 +662,8 @@ def format_deal(l: Listing, facts: Dict[str, Any], d: Deal) -> str:
         market.append(f"jauns LV no {d.new_min:.0f} €")
 
     lines = [
-        f"💰 <b>+{d.profit:.0f} € ({d.margin * 100:.0f}%)</b> · prasa {d.price:.0f} € → pārdot ~{d.resale:.0f} €",
+        ("🔥" if d.hot else "💰") +
+        f" <b>+{d.profit:.0f} € ({d.margin * 100:.0f}%)</b> · prasa {d.price:.0f} € → pārdot ~{d.resale:.0f} €",
         f"<b>{e(l.title[:120])}</b>",
         e(" · ".join(s for s in specs if s)),
     ]
@@ -616,6 +671,7 @@ def format_deal(l: Listing, facts: Dict[str, Any], d: Deal) -> str:
         lines.append(gen_line(facts))
     if market:
         lines.append("📊 " + e(" · ".join(market)))
+    lines.extend(hybrid_lines(d))
     if shop_line(d):
         lines.append(shop_line(d))
     if facts.get("defects"):
