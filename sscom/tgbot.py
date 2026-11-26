@@ -208,14 +208,23 @@ class TgBot:
         path = re.search(r"/msg/[^ ]+\.html", url).group(0)
         with self.store.engine.connect() as c:
             r = c.execute(select(L).where(L.c.url.like(f"%{path}"))).first()
+        cat = re.search(r"/msg/[a-z]{2}/[^/]+/[^/]+/([^/]+)/", path)
+        category = cat.group(1) if cat else "other"
+        fresh = None
+        if r is not None and r.status == "disappeared":
+            # ss.com dzēsta sludinājuma saiti piešķir citam — pārbaudām, vai tas vēl ir tas pats
+            page = self.client.get(url)
+            fresh = parser.parse_detail(page, url, category) if page else None
+            if fresh is not None and fresh.ss_id and fresh.ss_id != r.ss_id:
+                r = None
         if r is not None:
             l = db.row_to_listing(r)
             facts = json.loads(r.ai_json) if r.ai_json else None
         else:
-            cat = re.search(r"/msg/[a-z]{2}/[^/]+/[^/]+/([^/]+)/", path)
-            category = cat.group(1) if cat else "other"
-            page = self.client.get(url)
-            l = parser.parse_detail(page, url, category) if page else None
+            if fresh is None:
+                page = self.client.get(url)
+                fresh = parser.parse_detail(page, url, category) if page else None
+            l = fresh
             if l is None or not l.ss_id:
                 telegram.send_text("Neizdevās atvērt sludinājumu (varbūt dzēsts?).", reply_to=reply_to)
                 return

@@ -95,12 +95,19 @@ class Watcher:
         known = self.store.known_by_url(category)
         known_urls = set(known)
         notify = bool(known_urls)  # tukša bāze = sākumstāvoklis, nespamojam
-        new_items = [i for i in items if i.url not in known_urls]
+        # ss.com atkārtoti izmanto dzēstu sludinājumu saites. Ja saite pieder pazudušam sludinājumam
+        # vai cena nokritusi neticami (< 30%) — atveram lapu un izšķiram pēc ss_id (process_new).
+        def reused(i) -> bool:
+            if i.url not in known:
+                return False
+            _, old, status = known[i.url]
+            return status == "disappeared" or (old and i.price is not None and i.price < old * 0.3)
+        new_items = [i for i in items if i.url not in known_urls or reused(i)]
         # Pacelts sludinājums ar zemāku cenu — pamanām uzreiz, negaidot pilno pārbaudi
         for item in items:
-            if item.url in known and item.price is not None:
-                ss_id, old = known[item.url]
-                if old is not None and item.price < old:
+            if item.url in known and item.price is not None and not reused(item):
+                ss_id, old, status = known[item.url]
+                if old is not None and item.price < old and status == "active":
                     self.store.touch(ss_id, item.price, old)
                     self._price_drop(ss_id, old, item.price)
         new = 0

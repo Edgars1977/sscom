@@ -144,11 +144,11 @@ class Store:
             return set(c.execute(select(listings.c.url).where(listings.c.category == category)).scalars())
 
     def known_by_url(self, category: str) -> Dict[str, tuple]:
-        """url -> (ss_id, pēdējā zināmā cena)"""
+        """url -> (ss_id, pēdējā zināmā cena, statuss)"""
         with self.engine.connect() as c:
-            rows = c.execute(select(listings.c.url, listings.c.ss_id, listings.c.price)
+            rows = c.execute(select(listings.c.url, listings.c.ss_id, listings.c.price, listings.c.status)
                              .where(listings.c.category == category))
-            return {r.url: (r.ss_id, r.price) for r in rows}
+            return {r.url: (r.ss_id, r.price, r.status) for r in rows}
 
     def known_ids(self, category: str) -> Dict[str, Optional[float]]:
         """ss_id -> pēdējā zināmā cena."""
@@ -165,6 +165,10 @@ class Store:
         t = now()
         posted = l.posted_at.replace(tzinfo=None) if l.posted_at else None
         with self.engine.begin() as c:
+            # ss.com pēc dzēšanas īso saiti (…/kmgom.html) piešķir citam sludinājumam.
+            # Vecajam ierakstam saiti pārsaucam (…/kmgom.html#58155827), lai url paliek unikāls.
+            c.execute(update(listings).where(listings.c.url == l.url, listings.c.ss_id != l.ss_id)
+                      .values(url=listings.c.url + "#" + listings.c.ss_id))
             c.execute(insert(listings).values(
                 ss_id=l.ss_id, category=l.category, subcategory=l.subcategory, url=l.url,
                 title=l.title, description=l.description, city=l.city, price=l.price,
