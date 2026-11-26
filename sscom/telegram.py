@@ -116,6 +116,11 @@ def get_updates(offset: Optional[int], timeout: int = 30) -> List[Dict[str, Any]
     return res if isinstance(res, list) else []
 
 
+def typing() -> None:
+    """"raksta…" Telegramā — lai redzams, ka ziņa saņemta (ilgst ~5 s vai līdz atbildei)."""
+    _call("sendChatAction", action="typing")
+
+
 def download_file(file_id: str) -> Optional[bytes]:
     """Telegram faila (ekrānuzņēmuma) saturs. Saite satur bota tokenu — to nekur tālāk nedodam."""
     info = _call("getFile", with_chat=False, file_id=file_id)

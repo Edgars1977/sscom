@@ -119,6 +119,19 @@ ESTIMATE_SCHEMA = {
 }
 
 
+INTENT_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "properties": {
+        "intent": {"type": "string", "enum": ["listing_question", "market_question", "evaluate_listing",
+                                              "set_target", "weekly_report", "help", "other"]},
+        "query": {"type": "string"},
+        "price": {"type": ["number", "null"]},
+        "reply_lv": {"type": "string"},
+    },
+    "required": ["intent", "query", "price", "reply_lv"],
+}
+
+
 PARTS_SCHEMA = {
     "type": "object", "additionalProperties": False,
     "properties": {
@@ -244,6 +257,28 @@ class AI:
                                      ensure_ascii=False), PARTS_SCHEMA)
 
     # ---------------------------------------------------------------- 5. saruna un ekrānuzņēmumi
+
+    def classify_intent(self, text: str, last_alert: Optional[str]) -> Optional[Dict[str, Any]]:
+        """Ko Edgars grib no brīvas ziņas Telegramā (ne atbilde uz ziņu, ne saite)."""
+        return self._call(MODEL_FAST, "intent",
+                          "You route Telegram messages from Edgars (Latvian/Russian, informal, typos) to his ss.com "
+                          "used-computer-deals bot. Intents:\n"
+                          "- listing_question: a question about a specific listing the bot sent (e.g. 'par cik "
+                          "kaulēties?', 'vai vērts?', 'kāds tur ekrāns?') — refers to the LAST alert if not specified\n"
+                          "- market_question: prices/demand of a product or category ('cik maksā rtx 3060?', 'kā iet "
+                          "thinkpad t480?', 'kas notiek ar ssd tirgu?', 'pa cik pārdot manu gf75?')\n"
+                          "- evaluate_listing: he pasted a whole listing text (title, specs, price) to be evaluated\n"
+                          "- set_target: wants alerts below a price ('paziņo ja rtx 3060 zem 150', 'mērķis nvme 1tb 50')\n"
+                          "- weekly_report: wants the summary/report/statistics\n"
+                          "- help: asks what the bot can do\n"
+                          "- other: greeting, unclear, unrelated\n"
+                          "query: short product/category search phrase in English-ish tokens as on ss.com "
+                          "('rtx 3060', 'thinkpad t480', 'nvme 1tb', 'ddr4 16gb'), empty if none. price: number if given. "
+                          "reply_lv: for help/other — ONE short friendly Latvian sentence saying what you understood "
+                          "(a list of real features is appended automatically — do not invent or suggest features); "
+                          "otherwise empty.",
+                          json.dumps({"message": text, "last_alert_title": last_alert}, ensure_ascii=False),
+                          INTENT_SCHEMA)
 
     def chat(self, system: str, user: str) -> Optional[str]:
         return self._call(MODEL_SMART, "chat", system, user, None)
