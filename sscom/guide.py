@@ -12,7 +12,7 @@ import statistics
 from datetime import timedelta
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import Column, DateTime, Float, Integer, String, Table, Text, bindparam, select, update
+from sqlalchemy import Column, DateTime, Float, Integer, String, Table, Text, bindparam, func, select, update
 
 from . import db
 
@@ -39,6 +39,8 @@ price_guide = Table(
     Column("cheapest_url", String(300)),                        # lētākais aktīvais
     Column("cheapest_price", Float),
     Column("updated_at", DateTime, nullable=False),
+    Column("n_known", Integer),                                 # ar zināmu iznākumu (pazuduši vai ≥14 d)
+    Column("fast7", Float),                                     # daļa, kas pazūd ≤7 dienās
 )
 
 price_targets = Table(
@@ -296,6 +298,10 @@ def refresh(store: db.Store, prices=None, max_lookups: int = 25) -> int:
             c.execute(stmt, key_updates)
 
     now = db.now()
+    # sākotnējais krājums (pirmā apstaigāšana) — tā vecums nav zināms, ātrumam neder
+    with store.engine.connect() as c:
+        start = c.execute(select(func.min(L.c.first_seen))).scalar() or now
+    start += timedelta(days=1)
     out = []
     for k, items in groups.items():
         prices_ = sorted(r.price for r, _ in items)
@@ -308,6 +314,10 @@ def refresh(store: db.Store, prices=None, max_lookups: int = 25) -> int:
         active = [r for r, _ in items if r.status == "active"]
         days = [((r.disappeared_at or r.last_seen) - r.first_seen).total_seconds() / 86400 for r in gone]
         cheapest = min(active, key=lambda r: r.price) if active else None
+        known = [r for r, _ in items if r.first_seen >= start
+                 and (r.status == "disappeared" or now - r.first_seen >= timedelta(days=14))]
+        fast = [r for r in known if r.status == "disappeared"
+                and (r.disappeared_at or r.last_seen) - r.first_seen <= timedelta(days=7)]
 
         new_min = None
         # Diskiem "NVMe 512GB" ir pārāk vispārīgs — cenueksperts atrod korpusus/adapterus, ne diskus
@@ -335,6 +345,7 @@ def refresh(store: db.Store, prices=None, max_lookups: int = 25) -> int:
             new_min=new_min, buy_max=round(buy_max), updated_at=now,
             cheapest_url=cheapest.url if cheapest else None,
             cheapest_price=cheapest.price if cheapest else None,
+            n_known=len(known), fast7=round(len(fast) / len(known), 2) if known else None,
         ))
 
     with store.engine.begin() as c:

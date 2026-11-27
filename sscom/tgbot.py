@@ -442,6 +442,8 @@ class TgBot:
                 market.append(f"jauns LV no {deal.new_min:.0f} € ({l.price / deal.new_min * 100:.0f}%)")
             if market:
                 lines.append("📊 " + e(" · ".join(market)))
+            if deal.speed:
+                lines.append(deal.speed)
             lines.extend(hybrid_lines(deal))
             if shop_line(deal):
                 lines.append(shop_line(deal))

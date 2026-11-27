@@ -46,6 +46,11 @@ NEW_PRICE_CEILING = 0.85
 # Izpēte: ar ≥30% slieksni hibrīda karogi pazūd ≤3 d 39% (GPT vien 36%, vidēji 24%).
 HYBRID_MIN_MARGIN = float(os.getenv("DEAL_HYBRID_MIN_MARGIN", "0.30"))
 # Klases salīdzinājumi tiek GPT kā konteksts (paši par sevi kā cena bija slikti — 17%)
+# Ātrā aprite (cenu ceļvedis): grupa, kurā ≥50% sludinājumu pazūd 7 dienās un mediāna ≤4 d
+FAST_MIN_KNOWN = 5
+FAST7_MIN = float(os.getenv("DEAL_FAST7_MIN", "0.5"))
+FAST_DAYS_MAX = float(os.getenv("DEAL_FAST_DAYS_MAX", "4"))
+SLOW_DAYS = 12
 CLASS_MIN = {"fine": 5, "mid": 4, "broad": 4}
 CLASS_PERCENTILE = 0.4      # klase ir plašāka par modeli — vērtējam piesardzīgāk par mediānu
 BATTERY_COST = float(os.getenv("DEAL_BATTERY_COST", "25"))  # neoriģināla baterija LV ~22–30 €
@@ -104,6 +109,7 @@ class Deal:
     ml_est: Optional[float] = None
     repairs: List[Any] = field(default_factory=list)   # [("baterija", 25.0), ...]
     min_margin: float = MIN_MARGIN
+    speed: Optional[str] = None          # ⚡/⏱/🐢 rinda no cenu ceļveža
 
     @property
     def is_good(self) -> bool:
@@ -305,6 +311,10 @@ class DealEngine:
                     battery_deducted=battery, **deal_extra)
         if class_comps and not comps:
             deal.comps, deal.comps_label = class_comps, comps_label
+        try:
+            deal.speed = speed_line(guide_row(self.store, facts))
+        except Exception:
+            log.exception("Ātruma rinda neizdevās")
         with self.store.engine.begin() as c:
             c.execute(update(db.listings).where(db.listings.c.ss_id == l.ss_id).values(
                 resale_est=round(resale, 2), margin=round(deal.margin, 3), deal_conf=confidence,
@@ -383,6 +393,8 @@ class DealEngine:
             lines.append(f"📊 ss.com {g.n}×, mediāna {g.price_median:.0f} €"
                          + (f" · pārdodas ~{g.days_to_sell:.0f} d" if g.days_to_sell else "")
                          + (f" · jauns LV {g.new_min:.0f} €" if g.new_min else ""))
+            if speed_line(g):
+                lines.append(speed_line(g))
         if facts.get("defects"):
             lines.append("⚠️ " + e(facts["defects"][:150]))
         lines.append(f"📍 {e(l.city or '?')}")
@@ -391,6 +403,41 @@ class DealEngine:
             with self.store.engine.begin() as c:
                 c.execute(update(db.listings).where(db.listings.c.ss_id == l.ss_id).values(
                     notified_at=db.now(), notified_price=l.price, deal_sent_at=db.now(), matched_filter="AI mana cena"))
+            return True
+        return False
+
+    def _fast_flip_alert(self, l: Listing, facts: Dict[str, Any], deal: Optional[Deal]) -> bool:
+        """⚡ Ātrā aprite: grupa pārdodas ātri un šis ir ≤ mediāna/1.2 (Edgara 20%) — pat ja AI vērtējums
+        to nepacēla. Tikai, ja ceļvedī ir pietiekami datu."""
+        if facts["condition"] in ("broken", "for_parts"):
+            return False
+        g = guide_row(self.store, facts)
+        if not is_fast(g) or g.n < COMPS_MIN or l.price > g.buy_max or g.price_median - l.price < MIN_PROFIT:
+            return False
+        if deal is not None and deal.new_min and l.price > deal.new_min * MAX_NEW_RATIO:
+            return False  # Edgara noteikums: ne dārgāk par pusi no jaunas cenas
+        e = html.escape
+        profit = g.price_median - l.price
+        lines = [f"⚡ <b>Ātrais flips: {l.price:.0f} € → tirgū ~{g.price_median:.0f} € "
+                 f"(+{profit:.0f} €, {profit / l.price * 100:.0f}%)</b>",
+                 f"<b>{e(l.title[:120])}</b>", e(g.guide_key)]
+        if gen_line(facts):
+            lines.append(gen_line(facts))
+        lines.append(speed_line(g))
+        lines.append(f"📊 ss.com {g.n}×: {g.price_min:.0f}–{g.price_max:.0f} € · pirkt līdz {g.buy_max:.0f} €"
+                     + (f" · jauns LV {g.new_min:.0f} €" if g.new_min else ""))
+        if deal is not None:
+            lines.append(f"🤖 AI vērtējums: ~{deal.resale:.0f} € ({deal.margin * 100:+.0f}%)"
+                         + (" — " + e(deal.verdict[:200]) if deal.verdict else ""))
+        if facts.get("defects"):
+            lines.append("⚠️ " + e(facts["defects"][:150]))
+        lines.append(f"📍 {e(l.city or '?')}")
+        lines.append(f'<a href="{e(l.url)}">Atvērt ss.com</a>')
+        if telegram.send_listing(l, "", text="\n".join(lines)):
+            with self.store.engine.begin() as c:
+                c.execute(update(db.listings).where(db.listings.c.ss_id == l.ss_id).values(
+                    notified_at=db.now(), notified_price=l.price, deal_sent_at=db.now(), matched_filter="AI ātrais flips"))
+            log.info("Ātrais flips: %s %.0f € (mediāna %.0f €)", l.url, l.price, g.price_median)
             return True
         return False
 
@@ -443,6 +490,8 @@ class DealEngine:
             if g is not None:
                 lines.append(f"📊 ss.com {g.n}×, mediāna {g.price_median:.0f} € · pirkt līdz {g.buy_max:.0f} €"
                              + (f" · pārdodas ~{g.days_to_sell:.0f} d" if g.days_to_sell else ""))
+            if speed_line(g):
+                lines.append(speed_line(g))
             if facts.get("defects"):
                 lines.append("⚠️ " + e(facts["defects"][:150]))
             lines.append(f"📍 {e(l.city or '?')}")
@@ -483,6 +532,8 @@ class DealEngine:
                 market.append(f"jauns LV no {deal.new_min:.0f} € ({l.price / deal.new_min * 100:.0f}%)")
             if market:
                 lines.append("📊 " + e(" · ".join(market)))
+            if deal.speed:
+                lines.append(deal.speed)
             lines.extend(hybrid_lines(deal))
             if shop_line(deal):
                 lines.append(shop_line(deal))
@@ -537,6 +588,8 @@ class DealEngine:
                             deal_sent_at=db.now(), notified_at=db.now(), notified_price=l.price, matched_filter="AI pa daļām"))
                     log.info("Pa daļām: %s %.0f € -> ~%.0f €", l.url, po.price, po.total)
                     return True
+        if (deal is None or not deal.is_good) and self._fast_flip_alert(l, facts, deal):
+            return True
         if deal is None or not deal.is_good:
             if deal:
                 log.info("Nav darījums: %s %.0f € -> ~%.0f € (%+.0f%%)", facts["model_key"], deal.price,
@@ -572,6 +625,33 @@ def format_partout(l: Listing, facts: Dict[str, Any], po: PartOut) -> str:
         lines.append("🤖 " + e(po.verdict[:300]))
     lines.append(f'<a href="{e(l.url)}">Atvērt ss.com</a>')
     return "\n".join(lines)
+
+
+def guide_row(store: db.Store, facts: Dict[str, Any]):
+    from . import guide
+    key = guide.guide_key(facts)
+    if not key:
+        return None
+    with store.engine.connect() as c:
+        return c.execute(select(guide.price_guide).where(guide.price_guide.c.guide_key == key)).first()
+
+
+def is_fast(g) -> bool:
+    return (g is not None and (g.n_known or 0) >= FAST_MIN_KNOWN and (g.fast7 or 0) >= FAST7_MIN
+            and g.days_to_sell is not None and g.days_to_sell <= FAST_DAYS_MAX)
+
+
+def speed_line(g) -> Optional[str]:
+    """⚡ ātri pārdodas: 80% 7 dienās, mediāna 1.6 d (9×) · 🐢 lēni … · ⏱ vidēji …"""
+    if g is None or (g.n_known or 0) < FAST_MIN_KNOWN or g.fast7 is None:
+        return None
+    stats = f"{g.fast7 * 100:.0f}% 7 dienās" + (f", mediāna {g.days_to_sell:.1f} d" if g.days_to_sell else "") \
+        + f" ({g.n_known}× {html.escape(g.guide_key)})"
+    if is_fast(g):
+        return "⚡ ātri pārdodas: " + stats
+    if g.fast7 < 0.3 or (g.days_to_sell or 0) >= SLOW_DAYS:
+        return "🐢 lēni pārdodas: " + stats
+    return "⏱ vidēji: " + stats
 
 
 def hybrid_lines(d: Optional["Deal"]) -> List[str]:
@@ -632,6 +712,8 @@ def format_eval_line(facts: Dict[str, Any], d: Deal, po: Optional[PartOut] = Non
             f" · pārliecība: {CONF_LV.get(d.confidence, d.confidence)}")
     if gen_line(facts):
         line = gen_line(facts) + "\n" + line
+    if d.speed:
+        line += "\n" + d.speed
     for h in hybrid_lines(d):
         line += "\n" + h
     if shop_line(d):
@@ -671,6 +753,8 @@ def format_deal(l: Listing, facts: Dict[str, Any], d: Deal) -> str:
         lines.append(gen_line(facts))
     if market:
         lines.append("📊 " + e(" · ".join(market)))
+    if d.speed:
+        lines.append(d.speed)
     lines.extend(hybrid_lines(d))
     if shop_line(d):
         lines.append(shop_line(d))
