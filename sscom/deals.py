@@ -479,6 +479,9 @@ class DealEngine:
         e = html.escape
         drop = (old_price - new_price) / old_price * 100 if old_price else 0
         head = f"📉 <b>Cena samazināta: {old_price:.0f} → {new_price:.0f} €</b> (−{drop:.0f}%)"
+        stale = age_line(self.store, ss_id)
+        if stale:
+            head += "\n" + stale
         if good:
             body = format_deal(l, facts, deal)
         else:
@@ -625,6 +628,27 @@ def format_partout(l: Listing, facts: Dict[str, Any], po: PartOut) -> str:
         lines.append("🤖 " + e(po.verdict[:300]))
     lines.append(f'<a href="{e(l.url)}">Atvērt ss.com</a>')
     return "\n".join(lines)
+
+
+STALE_DAYS = 21
+
+
+def age_line(store: db.Store, ss_id: str) -> Optional[str]:
+    """⏳ Ilgi nepārdots sludinājums: "ievietots 49 d · 480 → 300 → 270 € — tirgus to neņem, pajautā kāpēc"."""
+    L = db.listings
+    with store.engine.connect() as c:
+        first = c.execute(select(L.c.first_seen).where(L.c.ss_id == ss_id)).scalar()
+        hist = [p for p, in c.execute(select(db.price_history.c.price).where(db.price_history.c.ss_id == ss_id)
+                                      .order_by(db.price_history.c.seen_at))]
+    if first is None:
+        return None
+    days = (db.now() - first).days
+    if days < STALE_DAYS:
+        return None
+    prices = [p for i, p in enumerate(hist) if i == 0 or p != hist[i - 1]]
+    chain = " → ".join(f"{p:.0f}" for p in prices[-4:]) + " €" if len(prices) > 1 else ""
+    return (f"⏳ <b>ievietots jau {days} d</b>" + (f" · {chain}" if chain else "") +
+            " — neviens nav nopircis; pajautā pārdevējam, kāpēc (defekts? apraksts neatbilst?)")
 
 
 def guide_row(store: db.Store, facts: Dict[str, Any]):

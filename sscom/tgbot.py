@@ -22,7 +22,7 @@ from typing import Any, Dict, Optional
 from sqlalchemy import BigInteger, Column, DateTime, Integer, String, Table, select, update
 
 from . import config, db, dealer, guide, inventory, parser, telegram
-from .deals import CONDITION_LV, CONF_LV, MAX_NEW_RATIO, MIN_MARGIN, DealEngine, gen_line, hybrid_lines, shop_line
+from .deals import CONDITION_LV, CONF_LV, MAX_NEW_RATIO, MIN_MARGIN, DealEngine, age_line, gen_line, hybrid_lines, shop_line
 from .http import Client
 
 log = logging.getLogger(__name__)
@@ -146,6 +146,9 @@ class TgBot:
             if ref and ref["kind"] == "purchase" and ref["ref"] and _number(text) is not None:
                 return self.set_purchase_price(ref["ref"], _number(text), mid)
             if ref and ref["ss_id"]:
+                it = self.deals.ai.classify_intent(text, self._title(ref["ss_id"])) if self.deals.ai.enabled else None
+                if it and it["intent"] == "correction":
+                    return self.correct(ref["ss_id"], text, mid)
                 return self.answer(ref["ss_id"], text, mid)
         if m.get("photo"):
             return self.review_screenshot(m["photo"][-1]["file_id"], text, mid)
@@ -174,6 +177,40 @@ class TgBot:
                           .where(tg_messages.c.kind == "listing")
                           .order_by(tg_messages.c.sent_at.desc()).limit(1)).first()
         return (r.ss_id, r.title) if r else None
+
+    def _title(self, ss_id: str) -> Optional[str]:
+        with self.store.engine.connect() as c:
+            t = c.execute(select(db.listings.c.title).where(db.listings.c.ss_id == ss_id)).scalar()
+        return (t or "")[:120] or None
+
+    def correct(self, ss_id: str, text: str, mid: int) -> None:
+        """✏️ Edgars labo sludinājuma faktus (pārdevējs sarakstījis nepareizi) -> jauna analīze un vērtējums.
+        Labojums glabājas ai_json.edgars_correction un pārspēj sludinājuma tekstu."""
+        L = db.listings
+        with self.store.engine.connect() as c:
+            r = c.execute(select(L).where(L.c.ss_id == ss_id)).first()
+        if r is None:
+            telegram.send_text("Šo sludinājumu vairs neatrodu datubāzē.", reply_to=mid)
+            return
+        old = json.loads(r.ai_json or "{}")
+        notes = [n for n in (old.get("edgars_correction") or "").split(" | ") if n] + [text.strip()]
+        l = db.row_to_listing(r)
+        l.description = ((l.description or "") +
+                         "\n\n=== VERIFIED BY THE BUYER (Edgars) — these facts are TRUE and OVERRIDE the ad text, "
+                         "title and parameters above: " + " | ".join(notes) + " ===")
+        facts = self.deals.analyse(l, force=True)
+        if not facts:
+            telegram.send_text("Neizdevās pārrēķināt (AI kļūda). Pamēģini vēlreiz.", reply_to=mid)
+            return
+        facts["edgars_correction"] = " | ".join(notes)
+        with self.store.engine.begin() as c:
+            c.execute(update(L).where(L.c.ss_id == ss_id).values(ai_json=json.dumps(facts, ensure_ascii=False)))
+        changed = [f"{k}: {old.get(k)} → {facts.get(k)}" for k in ("model_key", "storage_gb", "ram_gb", "gpu", "cpu",
+                                                                     "condition", "defects")
+                   if old.get(k) != facts.get(k)]
+        telegram.send_text("✏️ Pieņemts labojums" + (":\n" + html.escape("\n".join(changed)) if changed else
+                           " (fakti nemainījās — to ņemšu vērā vērtējumā)") + "\nPārrēķinu…", reply_to=mid)
+        self._review(l, facts, mid, source="✏️")
 
     def route(self, text: str, mid: int) -> None:
         if not self.deals.ai.enabled:
@@ -456,6 +493,11 @@ class TgBot:
             lines.append(f"🔧 pa daļām ~{po.total:.0f} € ({po.margin * 100:+.0f}%)")
         if facts.get("defects"):
             lines.append("⚠️ " + e(facts["defects"][:150]))
+        if facts.get("edgars_correction"):
+            lines.append("✏️ tavs labojums: " + e(facts["edgars_correction"][:200]))
+        stale = age_line(self.store, l.ss_id) if l.ss_id else None
+        if stale:
+            lines.append(stale)
         if l.url.startswith("http"):
             lines.append(f'<a href="{e(l.url)}">Atvērt ss.com</a>')
         lines.append("<i>💬 Atbildi uz šo ziņu, ja gribi jautāt sīkāk</i>")

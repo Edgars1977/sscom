@@ -123,7 +123,7 @@ INTENT_SCHEMA = {
     "type": "object", "additionalProperties": False,
     "properties": {
         "intent": {"type": "string", "enum": ["listing_question", "market_question", "evaluate_listing",
-                                              "set_target", "weekly_report", "help", "other"]},
+                                              "set_target", "weekly_report", "correction", "help", "other"]},
         "query": {"type": "string"},
         "price": {"type": ["number", "null"]},
         "reply_lv": {"type": "string"},
@@ -270,6 +270,9 @@ class AI:
                           "- evaluate_listing: he pasted a whole listing text (title, specs, price) to be evaluated\n"
                           "- set_target: wants alerts below a price ('paziņo ja rtx 3060 zem 150', 'mērķis nvme 1tb 50')\n"
                           "- weekly_report: wants the summary/report/statistics\n"
+                          "- correction: he says the listing's data is wrong or gives the real specs/condition "
+                          "('patiesībā 256 ssd', 'ekrāns mazāks', 'nav 512 bet 256', 'baterija beigta', "
+                          "'tas ir dash f15') — only when replying to a listing\n"
                           "- help: asks what the bot can do\n"
                           "- other: greeting, unclear, unrelated\n"
                           "query: short product/category search phrase in English-ish tokens as on ss.com "
